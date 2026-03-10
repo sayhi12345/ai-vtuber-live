@@ -31,7 +31,7 @@ class Settings:
     allowed_origins: list[str] = None  # type: ignore[assignment]
 
     default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "openai")
-    default_tts_provider: str = os.getenv("DEFAULT_TTS_PROVIDER", "openai")
+    default_tts_provider: str = os.getenv("DEFAULT_TTS_PROVIDER", "qwen")
 
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
     openai_base_url: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com")
@@ -52,6 +52,21 @@ class Settings:
         "GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts"
     )
     gemini_tts_voice: str = os.getenv("GEMINI_TTS_VOICE", "Leda")
+
+    qwen_tts_model: str = os.getenv(
+        "QWEN_TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
+    )
+    qwen_tts_device: str = os.getenv("QWEN_TTS_DEVICE", "auto")
+    qwen_tts_dtype: str = os.getenv("QWEN_TTS_DTYPE", "auto")
+    qwen_tts_attn_implementation: str = os.getenv(
+        "QWEN_TTS_ATTN_IMPLEMENTATION", "sdpa"
+    )
+    qwen_tts_language: str = os.getenv("QWEN_TTS_LANGUAGE", "Chinese")
+    qwen_tts_speaker: str = os.getenv("QWEN_TTS_SPEAKER", "Vivian")
+    qwen_tts_instructions: str = os.getenv(
+        "QWEN_TTS_INSTRUCTIONS",
+        "用自然、活潑的語氣說話，像一位個性鮮明的 AI VTuber，語速適中，情感真實。",
+    )
 
     sqlite_path: str = os.getenv(
         "SQLITE_PATH",

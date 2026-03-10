@@ -3,6 +3,7 @@ from __future__ import annotations
 from app.providers.base import LLMProvider, ProviderError, TTSProvider
 from app.providers.gemini_provider import GeminiProvider
 from app.providers.openai_provider import OpenAIProvider
+from app.providers.qwen_provider import QwenProvider
 
 
 class ProviderRegistry:
@@ -22,13 +23,15 @@ class ProviderRegistry:
         return provider
 
     def _get(self, name: str) -> object:
-        if name not in {"openai", "gemini"}:
+        if name not in {"openai", "gemini", "qwen"}:
             raise ProviderError(f"Unsupported provider: {name}")
         if name in self._instances:
             return self._instances[name]
         if name == "openai":
             provider: object = OpenAIProvider()
-        else:
+        elif name == "gemini":
             provider = GeminiProvider()
+        else:
+            provider = QwenProvider()
         self._instances[name] = provider
         return provider

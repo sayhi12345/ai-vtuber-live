@@ -46,6 +46,7 @@ export default function ChatPanel({
         <label>
           TTS
           <select value={ttsProvider} onChange={(e) => onChangeTTS(e.target.value)}>
+            <option value="qwen">Qwen Local</option>
             <option value="openai">OpenAI</option>
             <option value="gemini">Gemini</option>
           </select>

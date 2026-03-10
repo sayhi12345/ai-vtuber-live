@@ -11,7 +11,8 @@ def now_iso() -> str:
 
 
 Role = Literal["system", "user", "assistant"]
-Provider = Literal["openai", "gemini"]
+LLMProviderName = Literal["openai", "gemini"]
+TTSProviderName = Literal["openai", "gemini", "qwen"]
 
 
 class ChatMessage(BaseModel):
@@ -23,8 +24,8 @@ class ChatMessage(BaseModel):
 class ChatStreamRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
     message: str = Field(min_length=1, max_length=4000)
-    llm_provider: Provider | None = None
-    tts_provider: Provider | None = None
+    llm_provider: LLMProviderName | None = None
+    tts_provider: TTSProviderName | None = None
     persona_prompt: str | None = Field(default=None, max_length=4000)
     temperature: float = Field(default=0.7, ge=0.0, le=1.5)
 
@@ -32,7 +33,7 @@ class ChatStreamRequest(BaseModel):
 class TTSRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
     text: str = Field(min_length=1, max_length=1200)
-    provider: Provider | None = None
+    provider: TTSProviderName | None = None
     voice: str | None = Field(default=None, max_length=64)
     emotion: str | None = Field(default="neutral", max_length=32)
 

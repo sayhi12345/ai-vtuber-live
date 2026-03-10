@@ -11,7 +11,7 @@ import {
 import { useSpeechQueue } from "./lib/useSpeechQueue";
 
 const DEFAULT_LLM_PROVIDER = import.meta.env.VITE_DEFAULT_LLM_PROVIDER || "openai";
-const DEFAULT_TTS_PROVIDER = import.meta.env.VITE_DEFAULT_TTS_PROVIDER || "openai";
+const DEFAULT_TTS_PROVIDER = import.meta.env.VITE_DEFAULT_TTS_PROVIDER || "qwen";
 
 function makeSessionId() {
   if (window.crypto?.randomUUID) {
