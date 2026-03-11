@@ -90,6 +90,7 @@ export default function Live2DStage({
         const PIXI = await import("pixi.js");
         window.PIXI = PIXI;
         const { Live2DModel } = await import("pixi-live2d-display/cubism4");
+        // this could be "pixi-live2d-display/lib/cubism4" in older version
         if (canceled || !hostRef.current) {
           return;
         }
