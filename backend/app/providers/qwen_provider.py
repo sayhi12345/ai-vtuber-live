@@ -2,12 +2,15 @@ from __future__ import annotations
 
 import asyncio
 import io
+import logging
 import wave
 from dataclasses import dataclass
 from typing import Any
 
 from app.config import settings
 from app.providers.base import ProviderError, TTSProvider
+
+logger = logging.getLogger(__name__)
 
 _EMOTION_INSTRUCTIONS: dict[str, str] = {
     "happy": "用開心、元氣十足的語氣說話，語速稍快，帶一點笑意。",
@@ -31,7 +34,6 @@ class QwenProvider(TTSProvider):
     def __init__(self) -> None:
         self._model: _LoadedModel | None = None
         self._load_lock = asyncio.Lock()
-        self._infer_lock = asyncio.Lock()
 
     async def synthesize(
         self,
@@ -42,17 +44,16 @@ class QwenProvider(TTSProvider):
         loaded = await self._get_model()
         instruct = _EMOTION_INSTRUCTIONS.get(emotion or "neutral", settings.qwen_tts_instructions)
 
-        async with self._infer_lock:
-            try:
-                wavs, sample_rate = await asyncio.to_thread(
-                    loaded.model.generate_custom_voice,
-                    text=text,
-                    language=loaded.language,
-                    speaker=voice or loaded.speaker,
-                    instruct=instruct,
-                )
-            except Exception as exc:  # pragma: no cover - third-party runtime errors
-                raise ProviderError(f"Qwen TTS failed: {exc}") from exc
+        try:
+            wavs, sample_rate = await asyncio.to_thread(
+                loaded.model.generate_custom_voice,
+                text=text,
+                language=loaded.language,
+                speaker=voice or loaded.speaker,
+                instruct=instruct,
+            )
+        except Exception as exc:  # pragma: no cover - third-party runtime errors
+            raise ProviderError(f"Qwen TTS failed: {exc}") from exc
 
         if not wavs:
             raise ProviderError("Qwen TTS returned no audio frames.")
@@ -76,11 +77,19 @@ class QwenProvider(TTSProvider):
                 "Qwen local TTS dependencies are missing. Install backend requirements first."
             ) from exc
 
-        model_kwargs: dict[str, Any] = {
-            "device_map": _resolve_device(torch),
-            "dtype": _resolve_dtype(torch),
-        }
-        attn_implementation = _resolve_attn_implementation(model_kwargs["device_map"], model_kwargs["dtype"])
+        device = _resolve_device(torch)
+        dtype = _resolve_dtype(torch, device)
+        attn_implementation = _resolve_attn_implementation(device, dtype)
+
+        logger.info(
+            "Loading Qwen TTS model '%s' | device=%s | dtype=%s | attn=%s",
+            settings.qwen_tts_model,
+            device,
+            dtype,
+            attn_implementation or "default",
+        )
+
+        model_kwargs: dict[str, Any] = {"device_map": device, "dtype": dtype}
         if attn_implementation:
             model_kwargs["attn_implementation"] = attn_implementation
 
@@ -102,16 +111,34 @@ class QwenProvider(TTSProvider):
 
 
 def _resolve_device(torch: Any) -> str:
+    """Pick the best available compute device unless the user overrides it.
+
+    Priority: CUDA > MPS (Apple Silicon) > CPU
+    """
     configured = settings.qwen_tts_device.strip()
     if configured.lower() != "auto":
         return configured
-    return "cuda:0" if torch.cuda.is_available() else "cpu"
+    if torch.cuda.is_available():
+        return "cuda:0"
+    if getattr(torch.backends, "mps", None) and torch.backends.mps.is_available():
+        return "mps"
+    return "cpu"
 
 
-def _resolve_dtype(torch: Any) -> Any:
+def _resolve_dtype(torch: Any, device: str) -> Any:
+    """Choose the best floating-point dtype for *device*.
+
+    - CUDA  → bfloat16 (good balance of speed and numerical stability)
+    - MPS   → float16  (bfloat16 has limited MPS kernel support)
+    - CPU   → float32  (half-precision is slow on CPU)
+    """
     configured = settings.qwen_tts_dtype.strip().lower()
     if configured == "auto":
-        return torch.bfloat16 if torch.cuda.is_available() else torch.float32
+        if "cuda" in device:
+            return torch.bfloat16
+        if device == "mps":
+            return torch.float16
+        return torch.float32
 
     mapping = {
         "float16": torch.float16,
@@ -127,7 +154,9 @@ def _resolve_dtype(torch: Any) -> Any:
 
 
 def _resolve_attn_implementation(device_map: str, dtype: Any) -> str | None:
+    """Enable Flash Attention only on CUDA with a supported half-precision dtype."""
     if "cuda" not in str(device_map).lower():
+        # Flash Attention is CUDA-only; skip for MPS / CPU
         return None
     if settings.qwen_tts_attn_implementation.strip().lower() == "none":
         return None
