@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import time
+from collections.abc import AsyncIterator
 from datetime import datetime, timezone
 
 from fastapi import FastAPI, HTTPException, Query
@@ -20,6 +21,7 @@ from app.providers.base import ProviderError
 from app.providers.registry import ProviderRegistry
 from app.safety import SafetyPipeline
 from app.session_store import SessionControl, SessionEventBus, SessionStore, StageEvent
+from app.tarot import TAROT_DRAW_FAILURE_TEXT, TarotError, is_tarot_query, prepare_tarot_turn
 
 app = FastAPI(title=settings.app_name, debug=settings.debug)
 
@@ -43,6 +45,10 @@ def _now_iso() -> str:
 
 def _provider_name(requested: str | None, default_name: str) -> str:
     return (requested or default_name).lower()
+
+
+async def _scripted_reply_stream(text: str) -> AsyncIterator[str]:
+    yield text
 
 
 @app.get("/health")
@@ -166,6 +172,7 @@ async def chat_stream(payload: ChatStreamRequest):
 
         store.add_message(session_id, "user", safe_input.text)
         history = store.get_history(session_id, settings.history_limit)
+        tarot_mode = is_tarot_query(safe_input.text)
         accumulator = SegmentAccumulator()
         full_output_parts: list[str] = []
         segment_index = 0
@@ -175,14 +182,44 @@ async def chat_stream(payload: ChatStreamRequest):
             "session_id": session_id,
             "llm_provider": llm_provider_name,
             "tts_provider": tts_provider_name,
+            "mode": "tarot" if tarot_mode else "chat",
             "timestamp": _now_iso(),
         }
         yield sse_pack("start", start_payload)
         await events.publish(session_id, StageEvent(event="start", payload=start_payload))
 
         try:
-            llm = providers.llm(llm_provider_name)
-            async for chunk in llm.stream_reply(history, persona, payload.temperature):
+            reply_stream: AsyncIterator[str]
+            system_prompt = persona
+            llm_messages = history
+            metric_provider_name = llm_provider_name
+
+            if tarot_mode:
+                try:
+                    system_prompt, llm_messages = await prepare_tarot_turn(
+                        question=safe_input.text,
+                        history=history,
+                        persona_prompt=persona,
+                    )
+                except TarotError as exc:
+                    store.log_error(
+                        session_id,
+                        "tarot",
+                        str(exc),
+                        {"question": safe_input.text},
+                    )
+                    metric_provider_name = "tarot"
+                    reply_stream = _scripted_reply_stream(TAROT_DRAW_FAILURE_TEXT)
+                else:
+                    llm = providers.llm(llm_provider_name)
+                    reply_stream = llm.stream_reply(
+                        llm_messages, system_prompt, payload.temperature
+                    )
+            else:
+                llm = providers.llm(llm_provider_name)
+                reply_stream = llm.stream_reply(llm_messages, system_prompt, payload.temperature)
+
+            async for chunk in reply_stream:
                 if controls.should_stop(session_id):
                     stopped_payload = {"reason": "manual_stop"}
                     yield sse_pack("stopped", stopped_payload)
@@ -195,7 +232,7 @@ async def chat_stream(payload: ChatStreamRequest):
                     first_chunk_at = time.perf_counter()
                     ttft_ms = (first_chunk_at - turn_start) * 1000
                     store.log_metric(
-                        session_id, "llm_ttft_ms", ttft_ms, llm_provider_name
+                        session_id, "llm_ttft_ms", ttft_ms, metric_provider_name
                     )
                     yield sse_pack(
                         "metric",
