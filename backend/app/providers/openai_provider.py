@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-import json
 from collections.abc import AsyncIterator
+from urllib.parse import urlparse, urlunparse
 
 import httpx
+from langchain_openai import ChatOpenAI
 
 from app.config import settings
 from app.providers.base import LLMProvider, ProviderError, TTSProvider
+from app.providers.langchain_utils import build_langchain_messages, extract_text_content
 
 # gpt-4o-mini-tts 情緒語氣映射
 # 每個 emotion tag 對應一段 instructions，控制語速、音調與情感色彩
@@ -35,12 +37,30 @@ _EMOTION_INSTRUCTIONS: dict[str, str] = {
 }
 
 
+def _normalize_openai_urls(base_url: str) -> tuple[str, str]:
+    parsed = urlparse(base_url)
+    path = parsed.path.rstrip("/")
+
+    if path.endswith("/v1"):
+        root_path = path[: -len("/v1")]
+        api_path = path
+    else:
+        root_path = path
+        api_path = f"{path}/v1" if path else "/v1"
+
+    http_base_url = urlunparse(parsed._replace(path=root_path or "", params="", query="", fragment=""))
+    api_base_url = urlunparse(parsed._replace(path=api_path, params="", query="", fragment=""))
+    return http_base_url.rstrip("/"), api_base_url.rstrip("/")
+
+
 class OpenAIProvider(LLMProvider, TTSProvider):
     def __init__(self) -> None:
         if not settings.openai_api_key:
             raise ProviderError("OPENAI_API_KEY is required for OpenAI provider.")
         self._api_key = settings.openai_api_key
-        self._base_url = settings.openai_base_url.rstrip("/")
+        self._http_base_url, self._api_base_url = _normalize_openai_urls(
+            settings.openai_base_url.rstrip("/")
+        )
         # Persistent client with connection pooling — avoids TCP+TLS handshake
         # on every TTS/LLM request (significant savings at ~50-150ms per call).
         self._client = httpx.AsyncClient(
@@ -61,36 +81,22 @@ class OpenAIProvider(LLMProvider, TTSProvider):
         system_prompt: str,
         temperature: float,
     ) -> AsyncIterator[str]:
-        body = {
-            "model": settings.openai_chat_model,
-            "messages": [{"role": "system", "content": system_prompt}, *messages],
-            "temperature": temperature,
-            "stream": True,
-        }
+        prompt_messages = build_langchain_messages(messages, system_prompt)
+        chat_model = ChatOpenAI(
+            model=settings.openai_chat_model,
+            api_key=self._api_key,
+            base_url=self._api_base_url,
+            temperature=temperature,
+            streaming=True,
+        )
 
-        async with self._client.stream(
-                "POST",
-                f"{self._base_url}/v1/chat/completions",
-                headers=self._headers,
-                json=body,
-            ) as response:
-                if response.status_code >= 400:
-                    raise ProviderError(
-                        f"OpenAI chat failed: {response.status_code} {await response.aread()!r}"
-                    )
-                async for line in response.aiter_lines():
-                    if not line or not line.startswith("data: "):
-                        continue
-                    payload = line[6:]
-                    if payload == "[DONE]":
-                        break
-                    try:
-                        event = json.loads(payload)
-                        chunk = event["choices"][0]["delta"].get("content", "")
-                        if chunk:
-                            yield chunk
-                    except (KeyError, IndexError, json.JSONDecodeError) as exc:
-                        raise ProviderError(f"Invalid OpenAI stream chunk: {payload}") from exc
+        try:
+            async for chunk in chat_model.astream(prompt_messages):
+                text = extract_text_content(chunk.content)
+                if text:
+                    yield text
+        except Exception as exc:
+            raise ProviderError(f"OpenAI chat failed: {exc}") from exc
 
     async def synthesize(
         self,
@@ -116,7 +122,7 @@ class OpenAIProvider(LLMProvider, TTSProvider):
         chunks: list[bytes] = []
         async with self._client.stream(
             "POST",
-            f"{self._base_url}/v1/audio/speech",
+            f"{self._http_base_url}/v1/audio/speech",
             headers=self._headers,
             json=body,
         ) as response:
@@ -127,4 +133,3 @@ class OpenAIProvider(LLMProvider, TTSProvider):
                 chunks.append(chunk)
 
         return b"".join(chunks), "audio/ogg"
-

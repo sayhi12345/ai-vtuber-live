@@ -1,21 +1,20 @@
 from __future__ import annotations
 
 import base64
-import json
 from collections.abc import AsyncIterator
+from urllib.parse import urlparse
 
 import httpx
+from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.config import settings
 from app.providers.base import LLMProvider, ProviderError, TTSProvider
+from app.providers.langchain_utils import build_langchain_messages, extract_text_content
 
 
-def _map_role(role: str) -> str:
-    if role == "assistant":
-        return "model"
-    if role == "system":
-        return "user"
-    return role
+def _gemini_api_endpoint(base_url: str) -> str:
+    parsed = urlparse(base_url)
+    return parsed.netloc or parsed.path or base_url
 
 
 class GeminiProvider(LLMProvider, TTSProvider):
@@ -31,43 +30,26 @@ class GeminiProvider(LLMProvider, TTSProvider):
         system_prompt: str,
         temperature: float,
     ) -> AsyncIterator[str]:
-        url = (
-            f"{self._base_url}/v1beta/models/{settings.gemini_chat_model}:streamGenerateContent"
-            f"?alt=sse&key={self._api_key}"
-        )
-        body = {
-            "system_instruction": {"parts": [{"text": system_prompt}]},
-            "contents": [
-                {"role": _map_role(msg["role"]), "parts": [{"text": msg["content"]}]}
-                for msg in messages
-            ],
-            "generationConfig": {"temperature": temperature},
+        prompt_messages = build_langchain_messages(messages, system_prompt)
+        model_kwargs: dict[str, object] = {
+            "model": settings.gemini_chat_model,
+            "google_api_key": self._api_key,
+            "temperature": temperature,
         }
+        if self._base_url != "https://generativelanguage.googleapis.com":
+            model_kwargs["client_options"] = {
+                "api_endpoint": _gemini_api_endpoint(self._base_url)
+            }
 
-        async with httpx.AsyncClient(timeout=60.0) as client:
-            async with client.stream("POST", url, json=body) as response:
-                if response.status_code >= 400:
-                    raise ProviderError(
-                        f"Gemini chat failed: {response.status_code} {await response.aread()!r}"
-                    )
-                async for line in response.aiter_lines():
-                    if not line or not line.startswith("data: "):
-                        continue
-                    payload = line[6:]
-                    if payload == "[DONE]":
-                        break
-                    try:
-                        event = json.loads(payload)
-                        candidates = event.get("candidates", [])
-                        if not candidates:
-                            continue
-                        parts = candidates[0].get("content", {}).get("parts", [])
-                        for part in parts:
-                            text = part.get("text")
-                            if text:
-                                yield text
-                    except json.JSONDecodeError as exc:
-                        raise ProviderError(f"Invalid Gemini stream chunk: {payload}") from exc
+        chat_model = ChatGoogleGenerativeAI(**model_kwargs)
+
+        try:
+            async for chunk in chat_model.astream(prompt_messages):
+                text = extract_text_content(chunk.content)
+                if text:
+                    yield text
+        except Exception as exc:
+            raise ProviderError(f"Gemini chat failed: {exc}") from exc
 
     async def synthesize(
         self,
