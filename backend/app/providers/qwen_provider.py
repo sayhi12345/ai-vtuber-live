@@ -4,6 +4,7 @@ import asyncio
 import io
 import logging
 import wave
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any
 
@@ -34,6 +35,12 @@ class QwenProvider(TTSProvider):
     def __init__(self) -> None:
         self._model: _LoadedModel | None = None
         self._load_lock = asyncio.Lock()
+        # Fixed-size executor: pre-created threads avoid per-call OS overhead.
+        # max_workers=2 limits concurrent GPU kernel dispatches to prevent OOM.
+        self._executor = ThreadPoolExecutor(
+            max_workers=settings.qwen_tts_max_workers,
+            thread_name_prefix="qwen_tts",
+        )
 
     async def synthesize(
         self,
@@ -44,13 +51,15 @@ class QwenProvider(TTSProvider):
         loaded = await self._get_model()
         instruct = _EMOTION_INSTRUCTIONS.get(emotion or "neutral", settings.qwen_tts_instructions)
 
+        loop = asyncio.get_event_loop()
         try:
-            wavs, sample_rate = await asyncio.to_thread(
-                loaded.model.generate_custom_voice,
-                text=text,
-                language=loaded.language,
-                speaker=voice or loaded.speaker,
-                instruct=instruct,
+            wavs, sample_rate = await loop.run_in_executor(
+                self._executor,
+                self._run_inference,
+                loaded,
+                text,
+                voice or loaded.speaker,
+                instruct,
             )
         except Exception as exc:  # pragma: no cover - third-party runtime errors
             raise ProviderError(f"Qwen TTS failed: {exc}") from exc
@@ -59,13 +68,38 @@ class QwenProvider(TTSProvider):
             raise ProviderError("Qwen TTS returned no audio frames.")
         return _wav_bytes(wavs[0], sample_rate), "audio/wav"
 
+    def _run_inference(
+        self,
+        loaded: _LoadedModel,
+        text: str,
+        speaker: str,
+        instruct: str,
+    ) -> tuple[Any, int]:
+        """Run the model synchronously inside torch.inference_mode.
+
+        inference_mode disables both gradient tracking *and* autograd version
+        counters, giving lower per-kernel dispatch overhead than no_grad alone.
+        """
+        import torch
+
+        with torch.inference_mode():
+            return loaded.model.generate_custom_voice(
+                text=text,
+                language=loaded.language,
+                speaker=speaker,
+                instruct=instruct,
+            )
+
     async def _get_model(self) -> _LoadedModel:
         if self._model is not None:
             return self._model
 
         async with self._load_lock:
             if self._model is None:
-                self._model = await asyncio.to_thread(self._load_model)
+                loop = asyncio.get_event_loop()
+                self._model = await loop.run_in_executor(
+                    self._executor, self._load_model
+                )
         return self._model
 
     def _load_model(self) -> _LoadedModel:
@@ -102,6 +136,14 @@ class QwenProvider(TTSProvider):
             raise ProviderError(
                 f"Unable to load Qwen TTS model '{settings.qwen_tts_model}': {exc}"
             ) from exc
+
+        if settings.qwen_tts_compile:
+            logger.info("Compiling Qwen TTS model with torch.compile (mode=reduce-overhead)…")
+            try:
+                model = torch.compile(model, mode="reduce-overhead")
+                logger.info("torch.compile complete. First inference will trigger JIT warm-up.")
+            except Exception as exc:  # pragma: no cover - optional optimisation
+                logger.warning("torch.compile failed, falling back to eager mode: %s", exc)
 
         return _LoadedModel(
             model=model,

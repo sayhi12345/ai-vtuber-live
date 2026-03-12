@@ -67,6 +67,11 @@ class Settings:
         "QWEN_TTS_INSTRUCTIONS",
         "用自然、活潑的語氣說話，像一位個性鮮明的 AI VTuber，語速適中，情感真實。",
     )
+    # Set to true to enable torch.compile (reduce-overhead mode).
+    # First inference will be slow (~30-120s warm-up), subsequent calls are faster.
+    qwen_tts_compile: bool = _bool_env("QWEN_TTS_COMPILE", True)
+    # Max concurrent inference threads. Raise only if VRAM > 8 GB.
+    qwen_tts_max_workers: int = int(os.getenv("QWEN_TTS_MAX_WORKERS", "4"))
 
     sqlite_path: str = os.getenv(
         "SQLITE_PATH",
