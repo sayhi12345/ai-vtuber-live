@@ -36,7 +36,7 @@ async def calculate_bazi_chart_tool(
     hour: int,
     gender: str = "男",
 ) -> dict[str, Any]:
-    """Calculate a bazi chart for the provided birth date, time, and gender."""
+    """Calculate a bazi chart for the provided birth date, time, and gender ('男', '女')."""
     return calculate_bazi_chart(year=year, month=month, day=day, hour=hour, gender=gender)
 
 
@@ -59,7 +59,9 @@ class DeepAgentRuntime:
             system_prompt=system_prompt,
             temperature=temperature,
         )
-        last_text = ""
+        # Seed the stream cursor with the last assistant message from history so
+        # the agent's first state does not replay the previous turn back to the client.
+        last_text = _latest_assistant_text({"messages": messages})
 
         try:
             async for state in agent.astream({"messages": messages}, stream_mode="values"):

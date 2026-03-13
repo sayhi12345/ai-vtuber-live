@@ -59,14 +59,18 @@ def calculate_bazi_chart(
     hour: int,
     gender: str = "男",
 ) -> dict[str, Any]:
-    print(f"Calculating Bazi chart for: {year}-{month}-{day} {hour}:00 {gender}")
+    # Normalize gender to strictly "男" or "女" to prevent bazi_calc script errors
+    gender_str = str(gender).strip().lower()
+    norm_gender = "女" if "女" in gender_str or gender_str in ("f", "female", "woman", "girl") else "男"
+
+    print(f"Calculating Bazi chart for: {year}-{month}-{day} {hour}:00 {norm_gender}")
     module = _load_bazi_module()
     paipan = getattr(module, "paipan", None)
     if not callable(paipan):
         raise BaziError("Bazi calculator module does not expose paipan().")
 
     try:
-        result = paipan(year, month, day, hour, gender)
+        result = paipan(year, month, day, hour, norm_gender)
     except Exception as exc:  # pragma: no cover - passthrough from skill script
         raise BaziError(str(exc)) from exc
 

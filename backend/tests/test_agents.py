@@ -19,6 +19,25 @@ class _FakeAgent:
         yield {"messages": [_FakeMessage("ai", "你好，現在一起看這個牌陣。")]}
 
 
+class _FakeAgentWithHistoryReplay:
+    async def astream(self, *_args, **_kwargs):
+        yield {
+            "messages": [
+                {"role": "user", "content": "上一題"},
+                {"role": "assistant", "content": "前一題的回答"},
+                {"role": "user", "content": "下一題"},
+            ]
+        }
+        yield {
+            "messages": [
+                {"role": "user", "content": "上一題"},
+                {"role": "assistant", "content": "前一題的回答"},
+                {"role": "user", "content": "下一題"},
+                {"role": "assistant", "content": "新的塔羅解讀"},
+            ]
+        }
+
+
 def test_selective_router_routes_tarot_queries_to_agent():
     router = SelectiveAgentRouter()
 
@@ -159,6 +178,34 @@ def test_deep_agent_runtime_streams_only_new_text(monkeypatch):
     assert chunks == ["你好", "，現在一起看這個牌陣。"]
     assert captured["provider_name"] == "openai"
     assert captured["temperature"] == 0.3
+
+
+def test_deep_agent_runtime_does_not_replay_previous_assistant_turn(monkeypatch):
+    runtime = DeepAgentRuntime()
+    router = SelectiveAgentRouter()
+    decision = router.decide("幫我抽三張塔羅牌")
+
+    monkeypatch.setattr(runtime, "_create_agent", lambda **_kwargs: _FakeAgentWithHistoryReplay())
+
+    async def collect() -> list[str]:
+        return [
+            chunk
+            async for chunk in runtime.stream_reply(
+                route=decision,
+                provider_name="openai",
+                messages=[
+                    {"role": "user", "content": "上一題"},
+                    {"role": "assistant", "content": "前一題的回答"},
+                    {"role": "user", "content": "下一題"},
+                ],
+                system_prompt="你是一位 AI VTuber。",
+                temperature=0.3,
+            )
+        ]
+
+    chunks = asyncio.run(collect())
+
+    assert chunks == ["新的塔羅解讀"]
 
 
 def test_deep_agent_runtime_registers_tarot_and_bazi_tools(monkeypatch):
