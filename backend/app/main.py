@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 from collections.abc import AsyncIterator
 from datetime import datetime, timezone
@@ -22,6 +23,8 @@ from app.providers.base import ProviderError
 from app.providers.registry import ProviderRegistry
 from app.safety import SafetyPipeline
 from app.session_store import SessionControl, SessionEventBus, SessionStore, StageEvent
+
+logger = logging.getLogger(__name__)
 
 app = FastAPI(title=settings.app_name, debug=settings.debug)
 
@@ -47,6 +50,13 @@ def _now_iso() -> str:
 
 def _provider_name(requested: str | None, default_name: str) -> str:
     return (requested or default_name).lower()
+
+
+def _summarize_for_log(text: str, limit: int = 80) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[: limit - 1]}…"
 
 
 @app.get("/health")
@@ -171,6 +181,13 @@ async def chat_stream(payload: ChatStreamRequest):
         store.add_message(session_id, "user", safe_input.text)
         history = store.get_history(session_id, settings.history_limit)
         route = agent_router.decide(safe_input.text)
+        logger.info(
+            "Chat stream selected route: session_id=%s mode=%s skills=%s message=%r",
+            session_id,
+            route.mode,
+            route.skill_names,
+            _summarize_for_log(safe_input.text),
+        )
         accumulator = SegmentAccumulator()
         full_output_parts: list[str] = []
         segment_index = 0
@@ -194,6 +211,13 @@ async def chat_stream(payload: ChatStreamRequest):
             metric_provider_name = llm_provider_name
 
             if route.use_agent:
+                logger.info(
+                    "Chat stream dispatching request to agent runtime: session_id=%s mode=%s skills=%s llm_provider=%s",
+                    session_id,
+                    route.mode,
+                    route.skill_names,
+                    llm_provider_name,
+                )
                 metric_provider_name = f"agent:{llm_provider_name}"
                 reply_stream = agent_runtime.stream_reply(
                     route=route,
@@ -203,6 +227,12 @@ async def chat_stream(payload: ChatStreamRequest):
                     temperature=payload.temperature,
                 )
             else:
+                logger.info(
+                    "Chat stream dispatching request to standard llm path: session_id=%s mode=%s llm_provider=%s",
+                    session_id,
+                    route.mode,
+                    llm_provider_name,
+                )
                 llm = providers.llm(llm_provider_name)
                 reply_stream = llm.stream_reply(llm_messages, system_prompt, payload.temperature)
 

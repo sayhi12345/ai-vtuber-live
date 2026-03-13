@@ -48,8 +48,9 @@ def test_selective_router_logs_tarot_queries(caplog):
     decision = router.decide("幫我抽三張塔羅牌看感情")
 
     assert decision.mode == "tarot"
-    assert "Selective agent router observed divination-related query" in caplog.text
+    assert "Selective agent router detected divination-related query" in caplog.text
     assert "mode=tarot" in caplog.text
+    assert "Selective agent router routing request to tarot agent" in caplog.text
 
 
 def test_selective_router_logs_fortune_queries_without_skill_match(caplog):
@@ -60,8 +61,9 @@ def test_selective_router_logs_fortune_queries_without_skill_match(caplog):
 
     assert decision.mode == "chat"
     assert decision.skill_names == []
-    assert "Selective agent router observed divination-related query" in caplog.text
+    assert "Selective agent router detected divination-related query" in caplog.text
     assert "mode=chat" in caplog.text
+    assert "Selective agent router kept divination-related query on standard chat path" in caplog.text
 
 
 def test_latest_assistant_text_reads_langchain_message_content():

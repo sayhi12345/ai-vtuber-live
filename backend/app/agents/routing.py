@@ -88,12 +88,25 @@ class SelectiveAgentRouter:
         matched = tuple(skill for skill in self._skills if skill.matches(text))
         decision = AgentRouteDecision(use_agent=bool(matched), matched_skills=matched)
         if matched or _is_divination_query(text):
+            query_summary = _summarize_query(text)
             logger.info(
-                "Selective agent router observed divination-related query: mode=%s matched_skills=%s query=%r",
+                "Selective agent router detected divination-related query: mode=%s matched_skills=%s query=%r",
                 decision.mode,
                 decision.skill_names,
-                _summarize_query(text),
+                query_summary,
             )
+            if decision.mode == "tarot":
+                logger.info(
+                    "Selective agent router routing request to tarot agent: matched_skills=%s query=%r",
+                    decision.skill_names,
+                    query_summary,
+                )
+            elif decision.mode == "chat":
+                logger.info(
+                    "Selective agent router kept divination-related query on standard chat path: matched_skills=%s query=%r",
+                    decision.skill_names,
+                    query_summary,
+                )
         return decision
 
 
