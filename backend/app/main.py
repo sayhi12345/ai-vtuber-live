@@ -181,13 +181,7 @@ async def chat_stream(payload: ChatStreamRequest):
         store.add_message(session_id, "user", safe_input.text)
         history = store.get_history(session_id, settings.history_limit)
         route = agent_router.decide(safe_input.text)
-        logger.info(
-            "Chat stream selected route: session_id=%s mode=%s skills=%s message=%r",
-            session_id,
-            route.mode,
-            route.skill_names,
-            _summarize_for_log(safe_input.text),
-        )
+        print(f'Chat stream selected route: session_id={session_id} mode={route.mode} skills={route.skill_names} message={_summarize_for_log(safe_input.text)}')
         accumulator = SegmentAccumulator()
         full_output_parts: list[str] = []
         segment_index = 0
@@ -211,7 +205,7 @@ async def chat_stream(payload: ChatStreamRequest):
             metric_provider_name = llm_provider_name
 
             if route.use_agent:
-                logger.info(
+                print(
                     "Chat stream dispatching request to agent runtime: session_id=%s mode=%s skills=%s llm_provider=%s",
                     session_id,
                     route.mode,

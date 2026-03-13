@@ -10,6 +10,7 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 from langchain_openai import ChatOpenAI
 
 from app.agents.routing import AgentRouteDecision
+from app.bazi import calculate_bazi_chart
 from app.config import settings
 from app.providers.base import ProviderError
 from app.providers.gemini_provider import _gemini_api_endpoint
@@ -25,6 +26,18 @@ SKILLS_ROOT = BACKEND_ROOT / "skills"
 async def draw_tarot_cards_tool(question: str, spread: str = "three") -> dict[str, Any]:
     """Draw tarot cards for a reading and return a deterministic spread payload."""
     return await draw_tarot_cards(question=question, spread=spread)
+
+
+@tool
+async def calculate_bazi_chart_tool(
+    year: int,
+    month: int,
+    day: int,
+    hour: int,
+    gender: str = "男",
+) -> dict[str, Any]:
+    """Calculate a bazi chart for the provided birth date, time, and gender."""
+    return calculate_bazi_chart(year=year, month=month, day=day, hour=hour, gender=gender)
 
 
 class DeepAgentRuntime:
@@ -77,7 +90,7 @@ class DeepAgentRuntime:
             system_prompt=_compose_agent_system_prompt(system_prompt, route),
             backend=_build_backend_factory(backend_classes),
             skills=route.skill_sources,
-            tools=[draw_tarot_cards_tool],
+            tools=[draw_tarot_cards_tool, calculate_bazi_chart_tool],
         )
 
 

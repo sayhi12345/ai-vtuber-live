@@ -4,6 +4,7 @@ from dataclasses import dataclass
 import logging
 import re
 
+from app.bazi import is_bazi_query
 from app.tarot import is_tarot_query
 
 logger = logging.getLogger(__name__)
@@ -36,6 +37,8 @@ class AgentSkillSpec:
     def matches(self, text: str) -> bool:
         if self.name == "tarot":
             return is_tarot_query(text)
+        if self.name == "bazi-mingli":
+            return is_bazi_query(text)
         return False
 
 
@@ -82,6 +85,19 @@ class SelectiveAgentRouter:
                     "- Do not attempt shell execution; use the provided tool and file reads only."
                 ),
             ),
+            AgentSkillSpec(
+                name="bazi-mingli",
+                source_path="/skills/bazi-mingli",
+                runtime_instructions=(
+                    "Bazi skill compatibility rules:\n"
+                    "- The selected skill lives at /skills/bazi-mingli.\n"
+                    "- If the skill asks you to run scripts/bazi_calc.py, use the tool "
+                    "`calculate_bazi_chart_tool(year, month, day, hour, gender)` instead.\n"
+                    "- Treat relative references like `references/dayun-liunian.md` as files under "
+                    "`/skills/bazi-mingli/references/`.\n"
+                    "- Do not attempt shell execution; use the provided tool and file reads only."
+                ),
+            ),
         )
 
     def decide(self, text: str) -> AgentRouteDecision:
@@ -95,9 +111,10 @@ class SelectiveAgentRouter:
                 decision.skill_names,
                 query_summary,
             )
-            if decision.mode == "tarot":
+            if decision.use_agent:
                 logger.info(
-                    "Selective agent router routing request to tarot agent: matched_skills=%s query=%r",
+                    "Selective agent router routing request to agent skills: mode=%s matched_skills=%s query=%r",
+                    decision.mode,
                     decision.skill_names,
                     query_summary,
                 )

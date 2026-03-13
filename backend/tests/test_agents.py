@@ -31,6 +31,18 @@ def test_selective_router_routes_tarot_queries_to_agent():
     assert "draw_tarot_cards_tool" in decision.runtime_instructions
 
 
+def test_selective_router_routes_bazi_queries_to_agent():
+    router = SelectiveAgentRouter()
+
+    decision = router.decide("請幫我排八字命盤，看看今年大運和流年")
+
+    assert decision.use_agent is True
+    assert decision.mode == "bazi-mingli"
+    assert decision.skill_names == ["bazi-mingli"]
+    assert decision.skill_sources == ["/skills/bazi-mingli"]
+    assert "calculate_bazi_chart_tool" in decision.runtime_instructions
+
+
 def test_selective_router_leaves_regular_chat_on_standard_path():
     router = SelectiveAgentRouter()
 
@@ -50,7 +62,7 @@ def test_selective_router_logs_tarot_queries(caplog):
     assert decision.mode == "tarot"
     assert "Selective agent router detected divination-related query" in caplog.text
     assert "mode=tarot" in caplog.text
-    assert "Selective agent router routing request to tarot agent" in caplog.text
+    assert "Selective agent router routing request to agent skills" in caplog.text
 
 
 def test_selective_router_logs_fortune_queries_without_skill_match(caplog):
@@ -64,6 +76,24 @@ def test_selective_router_logs_fortune_queries_without_skill_match(caplog):
     assert "Selective agent router detected divination-related query" in caplog.text
     assert "mode=chat" in caplog.text
     assert "Selective agent router kept divination-related query on standard chat path" in caplog.text
+
+
+def test_selective_router_does_not_route_generic_fortune_queries_to_bazi():
+    router = SelectiveAgentRouter()
+
+    decision = router.decide("可以幫我算命看今天運勢嗎")
+
+    assert "bazi-mingli" not in decision.skill_names
+
+
+def test_selective_router_can_match_tarot_and_bazi_skills_together():
+    router = SelectiveAgentRouter()
+
+    decision = router.decide("先用塔羅再結合八字命盤幫我看今年流年")
+
+    assert decision.use_agent is True
+    assert decision.mode == "agent"
+    assert decision.skill_names == ["tarot", "bazi-mingli"]
 
 
 def test_latest_assistant_text_reads_langchain_message_content():
@@ -86,6 +116,17 @@ def test_compose_agent_system_prompt_appends_runtime_compat_rules():
     assert "你是一位 AI VTuber。" in prompt
     assert "Tarot skill compatibility rules" in prompt
     assert "/skills/tarot" in prompt
+
+
+def test_compose_agent_system_prompt_appends_bazi_runtime_compat_rules():
+    router = SelectiveAgentRouter()
+    decision = router.decide("請幫我看生辰八字與大運")
+
+    prompt = _compose_agent_system_prompt("你是一位 AI VTuber。", decision)
+
+    assert "你是一位 AI VTuber。" in prompt
+    assert "Bazi skill compatibility rules" in prompt
+    assert "/skills/bazi-mingli" in prompt
 
 
 def test_deep_agent_runtime_streams_only_new_text(monkeypatch):
@@ -118,3 +159,37 @@ def test_deep_agent_runtime_streams_only_new_text(monkeypatch):
     assert chunks == ["你好", "，現在一起看這個牌陣。"]
     assert captured["provider_name"] == "openai"
     assert captured["temperature"] == 0.3
+
+
+def test_deep_agent_runtime_registers_tarot_and_bazi_tools(monkeypatch):
+    runtime = DeepAgentRuntime()
+    router = SelectiveAgentRouter()
+    decision = router.decide("請幫我看生辰八字與大運")
+
+    captured: dict[str, object] = {}
+
+    def fake_load_deepagents():
+        def fake_create_deep_agent(**kwargs):
+            captured.update(kwargs)
+            return object()
+
+        return fake_create_deep_agent, {
+            "CompositeBackend": object,
+            "FilesystemBackend": object,
+            "StateBackend": object,
+        }
+
+    monkeypatch.setattr("app.agents.runtime._load_deepagents", fake_load_deepagents)
+    monkeypatch.setattr("app.agents.runtime._build_agent_model", lambda *_args, **_kwargs: object())
+    monkeypatch.setattr("app.agents.runtime._build_backend_factory", lambda *_args, **_kwargs: object())
+
+    runtime._create_agent(
+        route=decision,
+        provider_name="openai",
+        system_prompt="你是一位 AI VTuber。",
+        temperature=0.3,
+    )
+
+    tool_names = {tool.name for tool in captured["tools"]}
+    assert "draw_tarot_cards_tool" in tool_names
+    assert "calculate_bazi_chart_tool" in tool_names
