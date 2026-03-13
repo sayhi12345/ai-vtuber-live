@@ -9,6 +9,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from app.agents import DeepAgentRuntime, SelectiveAgentRouter
 from app.config import settings
 from app.models import (
     ChatStreamRequest,
@@ -21,7 +22,6 @@ from app.providers.base import ProviderError
 from app.providers.registry import ProviderRegistry
 from app.safety import SafetyPipeline
 from app.session_store import SessionControl, SessionEventBus, SessionStore, StageEvent
-from app.tarot import TAROT_DRAW_FAILURE_TEXT, TarotError, is_tarot_query, prepare_tarot_turn
 
 app = FastAPI(title=settings.app_name, debug=settings.debug)
 
@@ -37,6 +37,8 @@ safety = SafetyPipeline(settings.safety_blocklist)
 controls = SessionControl()
 events = SessionEventBus()
 providers = ProviderRegistry()
+agent_router = SelectiveAgentRouter()
+agent_runtime = DeepAgentRuntime()
 
 
 def _now_iso() -> str:
@@ -45,10 +47,6 @@ def _now_iso() -> str:
 
 def _provider_name(requested: str | None, default_name: str) -> str:
     return (requested or default_name).lower()
-
-
-async def _scripted_reply_stream(text: str) -> AsyncIterator[str]:
-    yield text
 
 
 @app.get("/health")
@@ -172,7 +170,7 @@ async def chat_stream(payload: ChatStreamRequest):
 
         store.add_message(session_id, "user", safe_input.text)
         history = store.get_history(session_id, settings.history_limit)
-        tarot_mode = is_tarot_query(safe_input.text)
+        route = agent_router.decide(safe_input.text)
         accumulator = SegmentAccumulator()
         full_output_parts: list[str] = []
         segment_index = 0
@@ -182,7 +180,8 @@ async def chat_stream(payload: ChatStreamRequest):
             "session_id": session_id,
             "llm_provider": llm_provider_name,
             "tts_provider": tts_provider_name,
-            "mode": "tarot" if tarot_mode else "chat",
+            "mode": route.mode,
+            "skills": route.skill_names,
             "timestamp": _now_iso(),
         }
         yield sse_pack("start", start_payload)
@@ -194,27 +193,15 @@ async def chat_stream(payload: ChatStreamRequest):
             llm_messages = history
             metric_provider_name = llm_provider_name
 
-            if tarot_mode:
-                try:
-                    system_prompt, llm_messages = await prepare_tarot_turn(
-                        question=safe_input.text,
-                        history=history,
-                        persona_prompt=persona,
-                    )
-                except TarotError as exc:
-                    store.log_error(
-                        session_id,
-                        "tarot",
-                        str(exc),
-                        {"question": safe_input.text},
-                    )
-                    metric_provider_name = "tarot"
-                    reply_stream = _scripted_reply_stream(TAROT_DRAW_FAILURE_TEXT)
-                else:
-                    llm = providers.llm(llm_provider_name)
-                    reply_stream = llm.stream_reply(
-                        llm_messages, system_prompt, payload.temperature
-                    )
+            if route.use_agent:
+                metric_provider_name = f"agent:{llm_provider_name}"
+                reply_stream = agent_runtime.stream_reply(
+                    route=route,
+                    provider_name=llm_provider_name,
+                    messages=llm_messages,
+                    system_prompt=system_prompt,
+                    temperature=payload.temperature,
+                )
             else:
                 llm = providers.llm(llm_provider_name)
                 reply_stream = llm.stream_reply(llm_messages, system_prompt, payload.temperature)

@@ -3,6 +3,7 @@
 Character-first conversational web app:
 
 - Text input chat with persona-driven LLM replies
+- Selective agent routing: skill-like requests can switch into a LangChain Deep Agents path
 - SSE streaming output + sentence segmentation + emotion tags
 - Real TTS playback (local Qwen / OpenAI / Gemini) with subtitle sync
 - Stage view (`/stage`) for OBS Browser Source use
@@ -14,10 +15,12 @@ Character-first conversational web app:
 backend/
   app/
     main.py               # FastAPI + SSE endpoints
+    agents/              # Selective router + deep agent runtime
     safety.py             # Input/output filtering
     pipeline.py           # Segmentation, emotion tagging, SSE packer
     session_store.py      # SQLite messages/metrics/errors + stage event bus
     providers/            # OpenAI/Gemini LLM + Qwen local TTS adapters
+  skills/                # Deep Agent skill directories (tarot, ...)
 frontend/
   src/
     App.jsx               # Chat page + stage page
@@ -46,6 +49,13 @@ Required keys:
 
 - `OPENAI_API_KEY` for OpenAI providers
 - `GEMINI_API_KEY` for Gemini providers
+
+Agent skills:
+
+- `deepagents` is included in `backend/requirements.txt` for Python 3.11+
+- skill requests are routed selectively; normal chat still uses the standard provider flow
+- current built-in agent skill: `backend/skills/tarot`
+- the current local environment in this repo is Python 3.10, so agent-skill execution will require upgrading the backend runtime to Python 3.11+
 
 Local Qwen TTS defaults:
 
