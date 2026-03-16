@@ -7,6 +7,9 @@ const DEFAULT_CORE_SCRIPT_PATH =
   import.meta.env.VITE_LIVE2D_CORE_SCRIPT_PATH || "/live2d/live2dcubismcore.min.js";
 const MOUTH_PARAM_ID = "ParamMouthOpenY";
 const FALLBACK_LIP_SYNC_PARAMS = [MOUTH_PARAM_ID];
+const HALF_BODY_WIDTH_RATIO = 0.9;
+const HALF_BODY_HEIGHT_RATIO = 1.4;
+const HALF_BODY_Y_RATIO = 0.66;
 let cubismCoreReadyPromise = null;
 
 function clamp01(value) {
@@ -16,6 +19,21 @@ function clamp01(value) {
 function getLipSyncParamIds(model) {
   const ids = model?.internalModel?.settings?.getLipSyncParameters?.();
   return Array.isArray(ids) && ids.length ? ids : FALLBACK_LIP_SYNC_PARAMS;
+}
+
+function getModelSize(model) {
+  const bounds = model?.getLocalBounds?.();
+  if (bounds?.width && bounds?.height) {
+    return {
+      width: bounds.width,
+      height: bounds.height
+    };
+  }
+
+  return {
+    width: model?.width || 1,
+    height: model?.height || 1
+  };
 }
 
 function ensureCubismCoreScript() {
@@ -127,12 +145,13 @@ export default function Live2DStage({
           if (!clientWidth || !clientHeight) {
             return;
           }
+          const { width: modelWidth, height: modelHeight } = getModelSize(modelRef.current);
           const scale = Math.min(
-            (clientWidth * 0.82) / modelRef.current.width,
-            (clientHeight * 0.88) / modelRef.current.height
+            (clientWidth * HALF_BODY_WIDTH_RATIO) / modelWidth,
+            (clientHeight * HALF_BODY_HEIGHT_RATIO) / modelHeight
           );
           modelRef.current.scale.set(scale);
-          modelRef.current.position.set(clientWidth * 0.5, clientHeight * 0.52);
+          modelRef.current.position.set(clientWidth * 0.5, clientHeight * HALF_BODY_Y_RATIO);
         };
         layoutModel();
         resizeHandler = () => layoutModel();
