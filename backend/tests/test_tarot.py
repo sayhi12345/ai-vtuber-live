@@ -1,6 +1,6 @@
 import asyncio
 
-from app.tarot import _load_card_reference_index, is_tarot_query, prepare_tarot_turn
+from app.tarot import draw_tarot_cards, is_tarot_query
 
 
 def test_tarot_query_detection():
@@ -10,27 +10,13 @@ def test_tarot_query_detection():
     assert not is_tarot_query("幫我寫一段 React component")
 
 
-def test_card_reference_index_loads_known_cards():
-    index = _load_card_reference_index()
+def test_draw_tarot_cards_returns_agent_payload():
+    payload = asyncio.run(draw_tarot_cards(question="最近運勢如何"))
 
-    assert "愚者" in index
-    assert "聖盃二" in index
-    assert "關鍵詞" in index["愚者"]
-
-
-def test_prepare_tarot_turn_uses_real_draw_script():
-    system_prompt, messages = asyncio.run(
-        prepare_tarot_turn(
-            question="最近運勢如何",
-            history=[{"role": "user", "content": "最近運勢如何"}],
-            persona_prompt="你是一位 AI VTuber。",
-        )
-    )
-
-    assert "塔羅解讀模式" in system_prompt
-    assert len(messages) == 1
-    content = messages[0]["content"]
-    assert "系統已完成真實抽牌" in content
-    assert "牌陣：三牌陣" in content
-    assert "抽牌種子：" in content
-    assert "本地牌義參考：" in content
+    assert payload["spread"] == "three"
+    assert payload["spread_name"] == "三牌陣"
+    assert isinstance(payload["seed"], int)
+    assert payload["cards"]
+    first_card = payload["cards"][0]
+    assert {"position", "card", "orientation", "is_major"} <= set(first_card)
+    assert payload["time_factor_label"]
