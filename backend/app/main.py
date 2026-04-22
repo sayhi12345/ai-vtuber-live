@@ -11,6 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.agents import DeepAgentRuntime, SelectiveAgentRouter
+from app.characters import load_default_registry
 from app.config import settings
 from app.models import (
     ChatStreamRequest,
@@ -42,6 +43,11 @@ events = SessionEventBus()
 providers = ProviderRegistry()
 agent_router = SelectiveAgentRouter()
 agent_runtime = DeepAgentRuntime()
+characters = load_default_registry()
+if not characters.has(settings.default_character_id):
+    raise RuntimeError(
+        f"DEFAULT_CHARACTER_ID '{settings.default_character_id}' is not defined in characters/definitions/."
+    )
 
 
 def _now_iso() -> str:
@@ -62,6 +68,14 @@ def _summarize_for_log(text: str, limit: int = 80) -> str:
 @app.get("/health")
 async def health() -> dict[str, str]:
     return {"status": "ok", "time": _now_iso()}
+
+
+@app.get("/api/characters")
+async def list_characters() -> dict[str, object]:
+    return {
+        "default_character_id": settings.default_character_id,
+        "characters": characters.list_summaries(),
+    }
 
 
 @app.post("/api/session/reset")
@@ -154,7 +168,10 @@ async def chat_stream(payload: ChatStreamRequest):
     session_id = payload.session_id
     llm_provider_name = _provider_name(payload.llm_provider, settings.default_llm_provider)
     tts_provider_name = _provider_name(payload.tts_provider, settings.default_tts_provider)
-    persona = payload.persona_prompt or settings.default_persona_prompt
+    character_id = payload.character_id or settings.default_character_id
+    if not characters.has(character_id):
+        raise HTTPException(status_code=400, detail=f"Unknown character_id: {character_id}")
+    persona = characters.get(character_id).to_system_prompt()
 
     async def generator():
         turn_start = time.perf_counter()
