@@ -6,6 +6,8 @@ export default function ChatPanel({
   muted,
   llmProvider,
   ttsProvider,
+  characters,
+  characterId,
   sessionId,
   stageUrl,
   error,
@@ -15,8 +17,10 @@ export default function ChatPanel({
   onReset,
   onToggleMute,
   onChangeLLM,
-  onChangeTTS
+  onChangeTTS,
+  onChangeCharacter
 }) {
+  const currentCharacter = characters?.find((c) => c.id === characterId) || null;
   return (
     <section className="chat-panel">
       <header className="panel-header">
@@ -37,6 +41,24 @@ export default function ChatPanel({
 
       <div className="provider-row">
         <label>
+          角色
+          <select
+            value={characterId || ""}
+            onChange={(e) => onChangeCharacter(e.target.value || null)}
+            disabled={!characters?.length}
+          >
+            {characters?.length ? (
+              characters.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))
+            ) : (
+              <option value="">載入中...</option>
+            )}
+          </select>
+        </label>
+        <label>
           LLM
           <select value={llmProvider} onChange={(e) => onChangeLLM(e.target.value)}>
             <option value="openai">OpenAI</option>
@@ -52,6 +74,9 @@ export default function ChatPanel({
           </select>
         </label>
       </div>
+      {currentCharacter?.short_description ? (
+        <p className="muted character-desc">{currentCharacter.short_description}</p>
+      ) : null}
 
       <div className="stage-link">
         Stage View:
