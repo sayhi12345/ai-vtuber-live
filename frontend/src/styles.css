@@ -60,6 +60,11 @@ body {
   position: absolute;
   inset: 0;
   display: block;
+  cursor: grab;
+}
+
+.live2d-host:active {
+  cursor: grabbing;
 }
 
 .live2d-host canvas {
