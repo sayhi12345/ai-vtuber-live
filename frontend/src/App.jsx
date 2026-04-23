@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ChatPanel from "./components/ChatPanel";
 import Live2DStage from "./components/Live2DStage";
 import {
+  getCharacters,
   resetSession,
   setSessionMute,
   stopSession,
@@ -41,6 +42,24 @@ function ChatPage() {
   const [muted, setMuted] = useState(false);
   const [llmProvider, setLLMProvider] = useState(DEFAULT_LLM_PROVIDER);
   const [ttsProvider, setTTSProvider] = useState(DEFAULT_TTS_PROVIDER);
+  const [characters, setCharacters] = useState([]);
+  const [characterId, setCharacterId] = useState(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    getCharacters()
+      .then((data) => {
+        if (cancelled) return;
+        setCharacters(data.characters || []);
+        setCharacterId((prev) => prev || data.default_character_id || null);
+      })
+      .catch(() => {
+        // selector will stay empty; /chat will fall back to backend default
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const [sessionId] = useState(() => {
     const existing = window.localStorage.getItem("ai_vtuber_session_id");
@@ -127,7 +146,8 @@ function ChatPage() {
           session_id: sessionId,
           message: text,
           llm_provider: llmProvider,
-          tts_provider: ttsProvider
+          tts_provider: ttsProvider,
+          character_id: characterId
         },
         (eventName, data) => {
           switch (eventName) {
@@ -191,6 +211,8 @@ function ChatPage() {
         muted={muted}
         llmProvider={llmProvider}
         ttsProvider={ttsProvider}
+        characters={characters}
+        characterId={characterId}
         sessionId={sessionId}
         stageUrl={stageUrl}
         error={error}
@@ -201,6 +223,7 @@ function ChatPage() {
         onToggleMute={handleToggleMute}
         onChangeLLM={setLLMProvider}
         onChangeTTS={setTTSProvider}
+        onChangeCharacter={setCharacterId}
       />
     </main>
   );

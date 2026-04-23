@@ -140,6 +140,14 @@ export async function resetSession(sessionId) {
   });
 }
 
+export async function getCharacters() {
+  const response = await fetch(buildApiUrl("/api/characters"));
+  if (!response.ok) {
+    throw new Error(`Characters failed: ${response.status}`);
+  }
+  return response.json();
+}
+
 export async function getSessionMetrics(sessionId) {
   const response = await fetch(buildApiUrl(`/api/session/${encodeURIComponent(sessionId)}/metrics`));
   if (!response.ok) {

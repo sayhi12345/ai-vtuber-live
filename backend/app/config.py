@@ -29,6 +29,10 @@ class Settings:
     debug: bool = _bool_env("DEBUG", False)
 
     allowed_origins: list[str] = None  # type: ignore[assignment]
+    allowed_origin_regex: str | None = os.getenv(
+        "ALLOWED_ORIGIN_REGEX",
+        r"https?://(localhost|127\.0\.0\.1):\d+",
+    )
 
     default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "openai")
     default_tts_provider: str = os.getenv("DEFAULT_TTS_PROVIDER", "qwen")
@@ -79,13 +83,7 @@ class Settings:
     )
     history_limit: int = int(os.getenv("HISTORY_LIMIT", "12"))
     safety_blocklist: list[str] = None  # type: ignore[assignment]
-    default_persona_prompt: str = os.getenv(
-        "DEFAULT_PERSONA_PROMPT",
-        (
-            "你是一位有鮮明角色感的 AI VTuber。回覆要自然、可口播，維持一致語氣。"
-            "避免過長句，盡量 1-2 句一段。遇到不安全或違規內容要拒答並提供替代建議。"
-        ),
-    )
+    default_character_id: str = os.getenv("DEFAULT_CHARACTER_ID", "luna")
 
     def __post_init__(self) -> None:
         if self.allowed_origins is None:
