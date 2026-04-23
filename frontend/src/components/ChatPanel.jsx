@@ -155,48 +155,41 @@ function UserProfilePanel({
   const [saving, setSaving] = useState(false);
   const [profileError, setProfileError] = useState("");
 
-  useEffect(() => {
-    if (selectedUser) {
-      setBio(selectedUser.bio || "");
-      setName("");
-    }
-  }, [selectedUser]);
+  useEffect(() => { setName(""); }, [selectedUser?.id]);
+  useEffect(() => { setBio(selectedUser?.bio || ""); }, [selectedUser?.id, selectedUser?.bio]);
 
-  const handleCreate = async (event, createBio = bio) => {
-    event.preventDefault();
-    const cleanName = name.trim();
-    if (!cleanName) {
-      setProfileError("請輸入名稱。");
-      return;
-    }
+  const withSaving = async (action) => {
     setSaving(true);
     setProfileError("");
-    try {
-      await onCreateUser({ name: cleanName, bio: createBio });
-      setName("");
-      setBio("");
-    } catch (err) {
-      setProfileError(err.message);
-    } finally {
-      setSaving(false);
-    }
+    try { await action(); }
+    catch (err) { setProfileError(err.message); }
+    finally { setSaving(false); }
   };
 
-  const handleUpdate = async (event) => {
+  const handleCreate = (event) => {
+    event.preventDefault();
+    const cleanName = name.trim();
+    if (!cleanName) { setProfileError("請輸入名稱。"); return; }
+    withSaving(async () => {
+      await onCreateUser({ name: cleanName, bio });
+      setName("");
+      setBio("");
+    });
+  };
+
+  const handleQuickAdd = () => {
+    const cleanName = name.trim();
+    if (!cleanName) { setProfileError("請輸入名稱。"); return; }
+    withSaving(async () => {
+      await onCreateUser({ name: cleanName, bio: "" });
+      setName("");
+    });
+  };
+
+  const handleUpdate = (event) => {
     event.preventDefault();
     if (!selectedUser) return;
-    setSaving(true);
-    setProfileError("");
-    try {
-      await onUpdateUser(selectedUser.id, {
-        name: selectedUser.name,
-        bio
-      });
-    } catch (err) {
-      setProfileError(err.message);
-    } finally {
-      setSaving(false);
-    }
+    withSaving(() => onUpdateUser(selectedUser.id, { name: selectedUser.name, bio }));
   };
 
   if (loading) {
@@ -266,7 +259,7 @@ function UserProfilePanel({
           <button
             type="button"
             disabled={saving || busy || !name.trim()}
-            onClick={(event) => handleCreate(event, "")}
+            onClick={handleQuickAdd}
           >
             建立
           </button>

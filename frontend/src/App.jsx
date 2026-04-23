@@ -33,7 +33,7 @@ function createMessage(role, content) {
 }
 
 function ChatPage() {
-  const [messages, setMessages] = useState([]);
+  const [messagesByScope, setMessagesByScope] = useState({});
   const [draft, setDraft] = useState("");
   const [assistantDraft, setAssistantDraft] = useState("");
   const [subtitle, setSubtitle] = useState("");
@@ -53,6 +53,9 @@ function ChatPage() {
     return saved ? Number(saved) : null;
   });
   const [usersLoading, setUsersLoading] = useState(true);
+
+  const scopeKey = selectedUserId && characterId ? `${selectedUserId}:${characterId}` : null;
+  const messages = scopeKey ? (messagesByScope[scopeKey] || []) : [];
 
   useEffect(() => {
     let cancelled = false;
@@ -155,7 +158,7 @@ function ChatPage() {
   const handleReset = async () => {
     await handleStop();
     await resetSession(sessionId);
-    setMessages([]);
+    if (scopeKey) setMessagesByScope((prev) => ({ ...prev, [scopeKey]: [] }));
     setAssistantDraft("");
     setSubtitle("");
     setExpression("neutral");
@@ -166,6 +169,18 @@ function ChatPage() {
     const next = !muted;
     setMuted(next);
     await setSessionMute(sessionId, next);
+  };
+
+  const handleChangeCharacter = (newCharacterId) => {
+    setCharacterId(newCharacterId);
+    setAssistantDraft("");
+    setError("");
+  };
+
+  const handleChangeUser = (newUserId) => {
+    setSelectedUserId(newUserId);
+    setAssistantDraft("");
+    setError("");
   };
 
   const handleCreateUser = async ({ name, bio }) => {
@@ -198,10 +213,19 @@ function ChatPage() {
     draftRef.current = "";
     finalTextRef.current = "";
     resetStop();
-    setMessages((prev) => [...prev, createMessage("user", text)]);
 
     const controller = new AbortController();
     abortRef.current = controller;
+    const key = scopeKey;
+    const addMsg = (role, content) => {
+      if (!key) return;
+      setMessagesByScope((prev) => ({
+        ...prev,
+        [key]: [...(prev[key] || []), createMessage(role, content)],
+      }));
+    };
+
+    addMsg("user", text);
 
     try {
       await streamChat(
@@ -247,7 +271,7 @@ function ChatPage() {
       abortRef.current = null;
       const finalText = (finalTextRef.current || draftRef.current).trim();
       if (finalText) {
-        setMessages((prev) => [...prev, createMessage("assistant", finalText)]);
+        addMsg("assistant", finalText);
       }
       setAssistantDraft("");
       draftRef.current = "";
@@ -290,8 +314,8 @@ function ChatPage() {
         onToggleMute={handleToggleMute}
         onChangeLLM={setLLMProvider}
         onChangeTTS={setTTSProvider}
-        onChangeCharacter={setCharacterId}
-        onChangeUser={setSelectedUserId}
+        onChangeCharacter={handleChangeCharacter}
+        onChangeUser={handleChangeUser}
         onCreateUser={handleCreateUser}
         onUpdateUser={handleUpdateUser}
       />
