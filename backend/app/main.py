@@ -13,11 +13,19 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from app.agents import DeepAgentRuntime, SelectiveAgentRouter
 from app.characters import load_default_registry
 from app.config import settings
+from app.memory import (
+    MemoryCuratorAgent,
+    MemoryRecord,
+    MemoryService,
+    compose_memory_context,
+)
 from app.models import (
     ChatStreamRequest,
     SessionControlRequest,
     SessionMuteRequest,
     TTSRequest,
+    UserCreateRequest,
+    UserUpdateRequest,
 )
 from app.pipeline import SegmentAccumulator, detect_emotion, sse_pack
 from app.providers.base import ProviderError
@@ -44,6 +52,8 @@ events = SessionEventBus()
 providers = ProviderRegistry()
 agent_router = SelectiveAgentRouter()
 agent_runtime = DeepAgentRuntime()
+memory_service = MemoryService(settings.mem0_api_key, settings.mem0_enabled)
+memory_curator = MemoryCuratorAgent(providers)
 characters = load_default_registry()
 if not characters.has(settings.default_character_id):
     raise RuntimeError(
@@ -77,6 +87,29 @@ async def list_characters() -> dict[str, object]:
         "default_character_id": settings.default_character_id,
         "characters": characters.list_summaries(),
     }
+
+
+@app.get("/api/users")
+async def list_users() -> dict[str, object]:
+    return {"users": store.list_users()}
+
+
+@app.post("/api/users")
+async def create_user(payload: UserCreateRequest) -> dict[str, object]:
+    name = payload.name.strip()
+    if not name:
+        raise HTTPException(status_code=422, detail="User name is required.")
+    return {"user": store.create_user(name, payload.bio)}
+
+
+@app.patch("/api/users/{user_id}")
+async def update_user(user_id: int, payload: UserUpdateRequest) -> dict[str, object]:
+    if payload.name is not None and not payload.name.strip():
+        raise HTTPException(status_code=422, detail="User name is required.")
+    user = store.update_user(user_id, name=payload.name, bio=payload.bio)
+    if user is None:
+        raise HTTPException(status_code=404, detail="Unknown user_id")
+    return {"user": user}
 
 
 @app.post("/api/session/reset")
@@ -170,13 +203,18 @@ async def chat_stream(payload: ChatStreamRequest):
     llm_provider_name = _provider_name(payload.llm_provider, settings.default_llm_provider)
     tts_provider_name = _provider_name(payload.tts_provider, settings.default_tts_provider)
     character_id = payload.character_id or settings.default_character_id
+    user = store.get_user(payload.user_id)
+    if user is None:
+        raise HTTPException(status_code=400, detail="Unknown user_id")
     if not characters.has(character_id):
         raise HTTPException(status_code=400, detail=f"Unknown character_id: {character_id}")
-    persona = characters.get(character_id).to_system_prompt()
+    character = characters.get(character_id)
+    persona = character.to_system_prompt()
 
     async def generator():
         turn_start = time.perf_counter()
         controls.clear_stop(session_id)
+        relevant_memories: list[MemoryRecord] = []
 
         safe_input = safety.filter_input(payload.message)
         if not safe_input.allowed:
@@ -196,8 +234,24 @@ async def chat_stream(payload: ChatStreamRequest):
             await events.publish(session_id, StageEvent(event="done", payload={"text": ""}))
             return
 
-        store.add_message(session_id, "user", safe_input.text)
-        history = store.get_history(session_id, settings.history_limit)
+        store.add_message(session_id, "user", safe_input.text, payload.user_id, character_id)
+        try:
+            relevant_memories = await memory_service.search_memories(
+                query=safe_input.text,
+                user_id=payload.user_id,
+                character_id=character_id,
+                limit=settings.memory_search_limit,
+            )
+        except Exception as exc:
+            logger.warning("Mem0 search failed: %s", exc)
+            store.log_error(
+                session_id,
+                "memory_search",
+                str(exc),
+                {"user_id": payload.user_id, "character_id": character_id},
+            )
+            relevant_memories = []
+        history = store.get_scoped_history(payload.user_id, character_id, settings.history_limit)
         route = agent_router.decide(safe_input.text)
         print(f'Chat stream selected route: session_id={session_id} mode={route.mode} skills={route.skill_names} message={_summarize_for_log(safe_input.text)}')
         accumulator = SegmentAccumulator()
@@ -218,7 +272,11 @@ async def chat_stream(payload: ChatStreamRequest):
 
         try:
             reply_stream: AsyncIterator[str]
-            system_prompt = persona
+            system_prompt = compose_memory_context(
+                system_prompt=persona,
+                user=user,
+                memories=relevant_memories,
+            )
             llm_messages = history
             metric_provider_name = llm_provider_name
 
@@ -320,7 +378,7 @@ async def chat_stream(payload: ChatStreamRequest):
 
         full_text = "".join(full_output_parts).strip()
         if full_text:
-            store.add_message(session_id, "assistant", full_text)
+            store.add_message(session_id, "assistant", full_text, payload.user_id, character_id)
 
         total_ms = (time.perf_counter() - turn_start) * 1000
         store.log_metric(session_id, "turn_total_ms", total_ms, llm_provider_name)
@@ -329,6 +387,22 @@ async def chat_stream(payload: ChatStreamRequest):
         done_payload = {"text": full_text, "blocked": False}
         yield sse_pack("done", done_payload)
         await events.publish(session_id, StageEvent(event="done", payload=done_payload))
+        if full_text and memory_service.enabled:
+            asyncio.create_task(
+                _curate_and_store_memory(
+                    session_id=session_id,
+                    user=user,
+                    character_id=character_id,
+                    character_name=character.profile.name,
+                    user_message=safe_input.text,
+                    assistant_response=full_text,
+                    existing_memories=relevant_memories,
+                    provider_name=_provider_name(
+                        settings.memory_curator_provider,
+                        llm_provider_name,
+                    ),
+                )
+            )
 
     return StreamingResponse(
         generator(),
@@ -339,6 +413,69 @@ async def chat_stream(payload: ChatStreamRequest):
             "X-Accel-Buffering": "no",
         },
     )
+
+
+async def _curate_and_store_memory(
+    *,
+    session_id: str,
+    user: dict[str, object],
+    character_id: str,
+    character_name: str,
+    user_message: str,
+    assistant_response: str,
+    existing_memories: list[MemoryRecord],
+    provider_name: str,
+) -> None:
+    try:
+        decision = await memory_curator.curate(
+            user=user,
+            character_id=character_id,
+            character_name=character_name,
+            user_message=user_message,
+            assistant_response=assistant_response,
+            existing_memories=existing_memories,
+            provider_name=provider_name,
+        )
+    except Exception as exc:
+        logger.warning("Memory curator failed: %s", exc)
+        store.log_error(
+            session_id,
+            "memory_curator",
+            str(exc),
+            {"user_id": user.get("id"), "character_id": character_id},
+        )
+        return
+
+    if not decision.should_store:
+        return
+
+    records = [
+        MemoryRecord(
+            content=memory.content,
+            metadata={
+                "character_id": character_id,
+                "source": "chat",
+                "category": memory.category,
+                "sensitivity": memory.sensitivity,
+            },
+        )
+        for memory in decision.memories
+    ]
+    try:
+        await memory_service.add_memories(
+            memories=records,
+            user_id=int(user["id"]),
+            character_id=character_id,
+            run_id=session_id,
+        )
+    except Exception as exc:
+        logger.warning("Mem0 add failed: %s", exc)
+        store.log_error(
+            session_id,
+            "memory_add",
+            str(exc),
+            {"user_id": user.get("id"), "character_id": character_id},
+        )
 
 
 @app.exception_handler(Exception)
