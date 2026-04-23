@@ -46,12 +46,6 @@
       "Idle": [
         {
           "File": "motion/haru_g_idle.motion3.json"
-        },
-        {
-          "File": "motion/haru_g_m07.motion3.json"
-        },
-        {
-          "File": "motion/haru_g_m15.motion3.json"
         }
       ],
       "Tap": [

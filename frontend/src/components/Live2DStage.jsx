@@ -151,8 +151,8 @@ export default function Live2DStage({
         mouthCurrentRef.current = 0;
         lipSyncParamIdsRef.current = getLipSyncParamIds(model);
 
-        // Start idle loop
-        model.motion("Idle");
+        // Index 0 is haru_g_idle which has Loop:true; the other Idle entries are one-shots
+        model.motion("Idle", 0);
 
         // Apply any expression that arrived before the model was ready
         const initExpr = EMOTION_TO_EXPRESSION[expressionRef.current];
