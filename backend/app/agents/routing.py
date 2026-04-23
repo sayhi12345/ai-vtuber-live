@@ -5,6 +5,7 @@ import logging
 import re
 
 from app.bazi import is_bazi_query
+from app.pipeline import summarize_for_log
 from app.tarot import is_tarot_query
 
 logger = logging.getLogger(__name__)
@@ -134,8 +135,4 @@ def _is_divination_query(text: str) -> bool:
     return any(pattern.search(stripped) for pattern in _DIVINATION_PATTERNS)
 
 
-def _summarize_query(text: str, limit: int = 80) -> str:
-    normalized = " ".join(text.split())
-    if len(normalized) <= limit:
-        return normalized
-    return f"{normalized[: limit - 1]}…"
+_summarize_query = summarize_for_log

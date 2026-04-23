@@ -39,9 +39,19 @@ class SessionStore:
             cursor = self._conn.cursor()
             cursor.executescript(
                 """
+                CREATE TABLE IF NOT EXISTS users (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL,
+                    bio TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL
+                );
+
                 CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     session_id TEXT NOT NULL,
+                    user_id INTEGER,
+                    character_id TEXT,
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
                     created_at TEXT NOT NULL
@@ -70,16 +80,109 @@ class SessionStore:
                 );
                 """
             )
+            existing_message_columns = {
+                row["name"] for row in cursor.execute("PRAGMA table_info(messages)").fetchall()
+            }
+            if "user_id" not in existing_message_columns:
+                cursor.execute("ALTER TABLE messages ADD COLUMN user_id INTEGER")
+            if "character_id" not in existing_message_columns:
+                cursor.execute("ALTER TABLE messages ADD COLUMN character_id TEXT")
+            cursor.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_messages_user_character_created
+                ON messages (user_id, character_id, created_at)
+                """
+            )
             self._conn.commit()
 
-    def add_message(self, session_id: str, role: str, content: str) -> None:
+    def create_user(self, name: str, bio: str = "") -> dict[str, Any]:
+        timestamp = now_iso()
+        clean_name = name.strip()
+        clean_bio = bio.strip()
+        with _locked(self._lock):
+            cursor = self._conn.execute(
+                """
+                INSERT INTO users (name, bio, created_at, updated_at)
+                VALUES (?, ?, ?, ?)
+                """,
+                (clean_name, clean_bio, timestamp, timestamp),
+            )
+            self._conn.commit()
+            user_id = int(cursor.lastrowid)
+        return {
+            "id": user_id,
+            "name": clean_name,
+            "bio": clean_bio,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        }
+
+    def list_users(self) -> list[dict[str, Any]]:
+        with _locked(self._lock):
+            rows = self._conn.execute(
+                """
+                SELECT id, name, bio, created_at, updated_at
+                FROM users
+                ORDER BY updated_at DESC, id DESC
+                """
+            ).fetchall()
+        return [self._user_from_row(row) for row in rows]
+
+    def get_user(self, user_id: int) -> dict[str, Any] | None:
+        with _locked(self._lock):
+            row = self._conn.execute(
+                """
+                SELECT id, name, bio, created_at, updated_at
+                FROM users
+                WHERE id = ?
+                """,
+                (user_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return self._user_from_row(row)
+
+    def update_user(
+        self,
+        user_id: int,
+        *,
+        name: str | None = None,
+        bio: str | None = None,
+    ) -> dict[str, Any] | None:
+        existing = self.get_user(user_id)
+        if existing is None:
+            return None
+
+        next_name = existing["name"] if name is None else name.strip()
+        next_bio = existing["bio"] if bio is None else bio.strip()
+        updated_at = now_iso()
         with _locked(self._lock):
             self._conn.execute(
                 """
-                INSERT INTO messages (session_id, role, content, created_at)
-                VALUES (?, ?, ?, ?)
+                UPDATE users
+                SET name = ?, bio = ?, updated_at = ?
+                WHERE id = ?
                 """,
-                (session_id, role, content, now_iso()),
+                (next_name, next_bio, updated_at, user_id),
+            )
+            self._conn.commit()
+        return {**existing, "name": next_name, "bio": next_bio, "updated_at": updated_at}
+
+    def add_message(
+        self,
+        session_id: str,
+        role: str,
+        content: str,
+        user_id: int | None = None,
+        character_id: str | None = None,
+    ) -> None:
+        with _locked(self._lock):
+            self._conn.execute(
+                """
+                INSERT INTO messages (session_id, user_id, character_id, role, content, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (session_id, user_id, character_id, role, content, now_iso()),
             )
             self._conn.commit()
 
@@ -97,6 +200,34 @@ class SessionStore:
             ).fetchall()
         history = [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
         return history
+
+    def get_scoped_history(
+        self,
+        user_id: int,
+        character_id: str,
+        limit: int,
+    ) -> list[dict[str, str]]:
+        with _locked(self._lock):
+            rows = self._conn.execute(
+                """
+                SELECT role, content
+                FROM messages
+                WHERE user_id = ? AND character_id = ?
+                ORDER BY id DESC
+                LIMIT ?
+                """,
+                (user_id, character_id, limit),
+            ).fetchall()
+        return [{"role": row["role"], "content": row["content"]} for row in reversed(rows)]
+
+    def _user_from_row(self, row: sqlite3.Row) -> dict[str, Any]:
+        return {
+            "id": row["id"],
+            "name": row["name"],
+            "bio": row["bio"],
+            "created_at": row["created_at"],
+            "updated_at": row["updated_at"],
+        }
 
     def reset_session(self, session_id: str) -> None:
         with _locked(self._lock):

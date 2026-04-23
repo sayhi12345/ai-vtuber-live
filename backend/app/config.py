@@ -84,6 +84,11 @@ class Settings:
     history_limit: int = int(os.getenv("HISTORY_LIMIT", "12"))
     safety_blocklist: list[str] = None  # type: ignore[assignment]
     default_character_id: str = os.getenv("DEFAULT_CHARACTER_ID", "luna")
+    mem0_api_key: str | None = os.getenv("MEM0_API_KEY")
+    mem0_enabled: bool = _bool_env("MEM0_ENABLED", bool(os.getenv("MEM0_API_KEY")))
+    memory_search_limit: int = int(os.getenv("MEMORY_SEARCH_LIMIT", "5"))
+    memory_curator_provider: str | None = os.getenv("MEMORY_CURATOR_PROVIDER")
+    memory_curator_temperature: float = float(os.getenv("MEMORY_CURATOR_TEMPERATURE", "0.0"))
 
     def __post_init__(self) -> None:
         if self.allowed_origins is None:

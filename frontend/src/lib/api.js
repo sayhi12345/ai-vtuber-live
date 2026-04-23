@@ -1,7 +1,23 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(
+  /\/+$/,
+  ""
+);
 
 function buildApiUrl(path) {
-  return `${API_BASE_URL}${path}`;
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  if (API_BASE_URL.endsWith("/api") && normalizedPath.startsWith("/api/")) {
+    return `${API_BASE_URL}${normalizedPath.slice("/api".length)}`;
+  }
+  return `${API_BASE_URL}${normalizedPath}`;
+}
+
+async function apiFetch(path, options = {}) {
+  const response = await fetch(buildApiUrl(path), options);
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`${response.status} ${message}`);
+  }
+  return response.json();
 }
 
 function parseEventBlock(block) {
@@ -140,18 +156,23 @@ export async function resetSession(sessionId) {
   });
 }
 
-export async function getCharacters() {
-  const response = await fetch(buildApiUrl("/api/characters"));
-  if (!response.ok) {
-    throw new Error(`Characters failed: ${response.status}`);
-  }
-  return response.json();
-}
+export const getCharacters = () => apiFetch("/api/characters");
 
-export async function getSessionMetrics(sessionId) {
-  const response = await fetch(buildApiUrl(`/api/session/${encodeURIComponent(sessionId)}/metrics`));
-  if (!response.ok) {
-    throw new Error(`Metrics failed: ${response.status}`);
-  }
-  return response.json();
-}
+export const getUsers = () => apiFetch("/api/users");
+
+export const createUser = ({ name, bio }) =>
+  apiFetch("/api/users", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, bio })
+  });
+
+export const updateUser = (userId, { name, bio }) =>
+  apiFetch(`/api/users/${encodeURIComponent(userId)}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, bio })
+  });
+
+export const getSessionMetrics = (sessionId) =>
+  apiFetch(`/api/session/${encodeURIComponent(sessionId)}/metrics`);

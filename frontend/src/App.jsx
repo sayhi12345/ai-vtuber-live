@@ -2,12 +2,15 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ChatPanel from "./components/ChatPanel";
 import Live2DStage from "./components/Live2DStage";
 import {
+  createUser,
   getCharacters,
+  getUsers,
   resetSession,
   setSessionMute,
   stopSession,
   streamChat,
-  subscribeStage
+  subscribeStage,
+  updateUser
 } from "./lib/api";
 import { useSpeechQueue } from "./lib/useSpeechQueue";
 
@@ -30,7 +33,7 @@ function createMessage(role, content) {
 }
 
 function ChatPage() {
-  const [messages, setMessages] = useState([]);
+  const [messagesByScope, setMessagesByScope] = useState({});
   const [draft, setDraft] = useState("");
   const [assistantDraft, setAssistantDraft] = useState("");
   const [subtitle, setSubtitle] = useState("");
@@ -44,6 +47,15 @@ function ChatPage() {
   const [ttsProvider, setTTSProvider] = useState(DEFAULT_TTS_PROVIDER);
   const [characters, setCharacters] = useState([]);
   const [characterId, setCharacterId] = useState(null);
+  const [users, setUsers] = useState([]);
+  const [selectedUserId, setSelectedUserId] = useState(() => {
+    const saved = window.localStorage.getItem("ai_vtuber_user_id");
+    return saved ? Number(saved) : null;
+  });
+  const [usersLoading, setUsersLoading] = useState(true);
+
+  const scopeKey = selectedUserId && characterId ? `${selectedUserId}:${characterId}` : null;
+  const messages = scopeKey ? (messagesByScope[scopeKey] || []) : [];
 
   useEffect(() => {
     let cancelled = false;
@@ -55,6 +67,36 @@ function ChatPage() {
       })
       .catch(() => {
         // selector will stay empty; /chat will fall back to backend default
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    setUsersLoading(true);
+    getUsers()
+      .then((data) => {
+        if (cancelled) return;
+        const nextUsers = data.users || [];
+        setUsers(nextUsers);
+        setSelectedUserId((prev) => {
+          if (prev && nextUsers.some((user) => user.id === prev)) {
+            return prev;
+          }
+          return nextUsers[0]?.id || null;
+        });
+      })
+      .catch((err) => {
+        if (!cancelled) {
+          setError(err.message);
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setUsersLoading(false);
+        }
       });
     return () => {
       cancelled = true;
@@ -76,6 +118,14 @@ function ChatPage() {
   useEffect(() => {
     window.localStorage.setItem("ai_vtuber_session_id", sessionId);
   }, [sessionId]);
+
+  useEffect(() => {
+    if (selectedUserId) {
+      window.localStorage.setItem("ai_vtuber_user_id", String(selectedUserId));
+    } else {
+      window.localStorage.removeItem("ai_vtuber_user_id");
+    }
+  }, [selectedUserId]);
 
   const { enqueue, stop, resetStop } = useSpeechQueue({
     sessionId,
@@ -108,7 +158,7 @@ function ChatPage() {
   const handleReset = async () => {
     await handleStop();
     await resetSession(sessionId);
-    setMessages([]);
+    if (scopeKey) setMessagesByScope((prev) => ({ ...prev, [scopeKey]: [] }));
     setAssistantDraft("");
     setSubtitle("");
     setExpression("neutral");
@@ -121,10 +171,38 @@ function ChatPage() {
     await setSessionMute(sessionId, next);
   };
 
+  const handleChangeCharacter = (newCharacterId) => {
+    setCharacterId(newCharacterId);
+    setAssistantDraft("");
+    setError("");
+  };
+
+  const handleChangeUser = (newUserId) => {
+    setSelectedUserId(newUserId);
+    setAssistantDraft("");
+    setError("");
+  };
+
+  const handleCreateUser = async ({ name, bio }) => {
+    setError("");
+    const data = await createUser({ name, bio });
+    const user = data.user;
+    setUsers((prev) => [user, ...prev.filter((item) => item.id !== user.id)]);
+    setSelectedUserId(user.id);
+  };
+
+  const handleUpdateUser = async (userId, updates) => {
+    setError("");
+    const data = await updateUser(userId, updates);
+    const user = data.user;
+    setUsers((prev) => prev.map((item) => (item.id === user.id ? user : item)));
+    setSelectedUserId(user.id);
+  };
+
   const handleSubmit = async (event) => {
     event.preventDefault();
     const text = draft.trim();
-    if (!text || busy) {
+    if (!text || busy || !selectedUserId) {
       return;
     }
 
@@ -135,15 +213,25 @@ function ChatPage() {
     draftRef.current = "";
     finalTextRef.current = "";
     resetStop();
-    setMessages((prev) => [...prev, createMessage("user", text)]);
 
     const controller = new AbortController();
     abortRef.current = controller;
+    const key = scopeKey;
+    const addMsg = (role, content) => {
+      if (!key) return;
+      setMessagesByScope((prev) => ({
+        ...prev,
+        [key]: [...(prev[key] || []), createMessage(role, content)],
+      }));
+    };
+
+    addMsg("user", text);
 
     try {
       await streamChat(
         {
           session_id: sessionId,
+          user_id: selectedUserId,
           message: text,
           llm_provider: llmProvider,
           tts_provider: ttsProvider,
@@ -183,7 +271,7 @@ function ChatPage() {
       abortRef.current = null;
       const finalText = (finalTextRef.current || draftRef.current).trim();
       if (finalText) {
-        setMessages((prev) => [...prev, createMessage("assistant", finalText)]);
+        addMsg("assistant", finalText);
       }
       setAssistantDraft("");
       draftRef.current = "";
@@ -213,6 +301,9 @@ function ChatPage() {
         ttsProvider={ttsProvider}
         characters={characters}
         characterId={characterId}
+        users={users}
+        selectedUserId={selectedUserId}
+        usersLoading={usersLoading}
         sessionId={sessionId}
         stageUrl={stageUrl}
         error={error}
@@ -223,7 +314,10 @@ function ChatPage() {
         onToggleMute={handleToggleMute}
         onChangeLLM={setLLMProvider}
         onChangeTTS={setTTSProvider}
-        onChangeCharacter={setCharacterId}
+        onChangeCharacter={handleChangeCharacter}
+        onChangeUser={handleChangeUser}
+        onCreateUser={handleCreateUser}
+        onUpdateUser={handleUpdateUser}
       />
     </main>
   );

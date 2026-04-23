@@ -8,6 +8,7 @@ langchain-core>=0.3.79
 langchain-openai>=0.3.33
 langchain-google-genai>=2.1.12
 deepagents==0.4.10
+mem0ai>=0.1.118
 numpy==2.3.3
 qwen-tts==0.1.1
 pytest==8.4.2
