@@ -1,7 +1,14 @@
-const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:8000";
+const API_BASE_URL = (import.meta.env.VITE_API_BASE_URL || "http://localhost:8000").replace(
+  /\/+$/,
+  ""
+);
 
 function buildApiUrl(path) {
-  return `${API_BASE_URL}${path}`;
+  const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+  if (API_BASE_URL.endsWith("/api") && normalizedPath.startsWith("/api/")) {
+    return `${API_BASE_URL}${normalizedPath.slice("/api".length)}`;
+  }
+  return `${API_BASE_URL}${normalizedPath}`;
 }
 
 function parseEventBlock(block) {
@@ -144,6 +151,40 @@ export async function getCharacters() {
   const response = await fetch(buildApiUrl("/api/characters"));
   if (!response.ok) {
     throw new Error(`Characters failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function getUsers() {
+  const response = await fetch(buildApiUrl("/api/users"));
+  if (!response.ok) {
+    throw new Error(`Users failed: ${response.status}`);
+  }
+  return response.json();
+}
+
+export async function createUser({ name, bio }) {
+  const response = await fetch(buildApiUrl("/api/users"), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, bio })
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`Create user failed: ${response.status} ${message}`);
+  }
+  return response.json();
+}
+
+export async function updateUser(userId, { name, bio }) {
+  const response = await fetch(buildApiUrl(`/api/users/${encodeURIComponent(userId)}`), {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ name, bio })
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(`Update user failed: ${response.status} ${message}`);
   }
   return response.json();
 }

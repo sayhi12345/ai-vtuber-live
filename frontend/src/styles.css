@@ -199,6 +199,7 @@ body {
 
 button,
 select,
+input,
 textarea {
   font: inherit;
 }
@@ -234,6 +235,77 @@ select {
   background: rgba(0, 0, 0, 0.22);
   color: var(--text);
   padding: 4px 8px;
+}
+
+input {
+  border-radius: 8px;
+  border: 1px solid var(--line);
+  background: rgba(0, 0, 0, 0.22);
+  color: var(--text);
+  padding: 7px 9px;
+  min-width: 0;
+}
+
+.profile-panel {
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.profile-title {
+  font-weight: 700;
+  font-size: 0.9rem;
+}
+
+.profile-controls,
+.profile-add-grid {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 8px;
+  align-items: end;
+}
+
+.profile-controls label {
+  display: grid;
+  gap: 4px;
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.profile-controls select {
+  width: 100%;
+}
+
+.profile-panel textarea {
+  min-height: 64px;
+  max-height: 140px;
+  resize: vertical;
+  overflow: auto;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px;
+  background: rgba(0, 0, 0, 0.2);
+  color: var(--text);
+}
+
+.profile-create {
+  grid-template-columns: 1fr;
+}
+
+.profile-add {
+  color: var(--muted);
+  font-size: 0.82rem;
+}
+
+.profile-add summary {
+  cursor: pointer;
+}
+
+.profile-add-grid {
+  margin-top: 8px;
 }
 
 .stage-link {

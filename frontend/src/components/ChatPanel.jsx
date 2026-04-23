@@ -1,3 +1,5 @@
+import { useEffect, useMemo, useState } from "react";
+
 export default function ChatPanel({
   messages,
   assistantDraft,
@@ -8,6 +10,9 @@ export default function ChatPanel({
   ttsProvider,
   characters,
   characterId,
+  users,
+  selectedUserId,
+  usersLoading,
   sessionId,
   stageUrl,
   error,
@@ -18,9 +23,16 @@ export default function ChatPanel({
   onToggleMute,
   onChangeLLM,
   onChangeTTS,
-  onChangeCharacter
+  onChangeCharacter,
+  onChangeUser,
+  onCreateUser,
+  onUpdateUser
 }) {
   const currentCharacter = characters?.find((c) => c.id === characterId) || null;
+  const selectedUser = useMemo(
+    () => users?.find((user) => user.id === selectedUserId) || null,
+    [selectedUserId, users]
+  );
   return (
     <section className="chat-panel">
       <header className="panel-header">
@@ -78,6 +90,17 @@ export default function ChatPanel({
         <p className="muted character-desc">{currentCharacter.short_description}</p>
       ) : null}
 
+      <UserProfilePanel
+        users={users}
+        selectedUser={selectedUser}
+        selectedUserId={selectedUserId}
+        loading={usersLoading}
+        busy={busy}
+        onChangeUser={onChangeUser}
+        onCreateUser={onCreateUser}
+        onUpdateUser={onUpdateUser}
+      />
+
       <div className="stage-link">
         Stage View:
         <a href={stageUrl} target="_blank" rel="noreferrer">
@@ -105,14 +128,151 @@ export default function ChatPanel({
       <form className="composer" onSubmit={onSubmit}>
         <textarea
           value={draft}
-          placeholder="輸入你想和角色說的話..."
+          placeholder={selectedUser ? "輸入你想和角色說的話..." : "請先建立或選擇使用者"}
           onChange={(event) => onDraftChange(event.target.value)}
-          disabled={busy}
+          disabled={busy || !selectedUser}
         />
-        <button type="submit" disabled={busy || !draft.trim()}>
+        <button type="submit" disabled={busy || !draft.trim() || !selectedUser}>
           {busy ? "回覆中..." : "送出"}
         </button>
       </form>
     </section>
+  );
+}
+
+function UserProfilePanel({
+  users,
+  selectedUser,
+  selectedUserId,
+  loading,
+  busy,
+  onChangeUser,
+  onCreateUser,
+  onUpdateUser
+}) {
+  const [name, setName] = useState("");
+  const [bio, setBio] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [profileError, setProfileError] = useState("");
+
+  useEffect(() => {
+    if (selectedUser) {
+      setBio(selectedUser.bio || "");
+      setName("");
+    }
+  }, [selectedUser]);
+
+  const handleCreate = async (event, createBio = bio) => {
+    event.preventDefault();
+    const cleanName = name.trim();
+    if (!cleanName) {
+      setProfileError("請輸入名稱。");
+      return;
+    }
+    setSaving(true);
+    setProfileError("");
+    try {
+      await onCreateUser({ name: cleanName, bio: createBio });
+      setName("");
+      setBio("");
+    } catch (err) {
+      setProfileError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleUpdate = async (event) => {
+    event.preventDefault();
+    if (!selectedUser) return;
+    setSaving(true);
+    setProfileError("");
+    try {
+      await onUpdateUser(selectedUser.id, {
+        name: selectedUser.name,
+        bio
+      });
+    } catch (err) {
+      setProfileError(err.message);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return <div className="profile-panel muted">載入使用者...</div>;
+  }
+
+  if (!users?.length) {
+    return (
+      <form className="profile-panel profile-create" onSubmit={handleCreate}>
+        <div className="profile-title">建立使用者</div>
+        <input
+          value={name}
+          placeholder="你的名字"
+          onChange={(event) => setName(event.target.value)}
+          disabled={saving || busy}
+        />
+        <textarea
+          value={bio}
+          placeholder="簡短介紹，角色會把它當作你的基本資料"
+          onChange={(event) => setBio(event.target.value)}
+          disabled={saving || busy}
+        />
+        {profileError ? <p className="error">{profileError}</p> : null}
+        <button type="submit" disabled={saving || busy || !name.trim()}>
+          {saving ? "儲存中..." : "建立並選擇"}
+        </button>
+      </form>
+    );
+  }
+
+  return (
+    <form className="profile-panel" onSubmit={handleUpdate}>
+      <div className="profile-controls">
+        <label>
+          使用者
+          <select
+            value={selectedUserId || ""}
+            onChange={(event) => onChangeUser(Number(event.target.value) || null)}
+            disabled={busy || saving}
+          >
+            {users.map((user) => (
+              <option key={user.id} value={user.id}>
+                {user.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <button type="submit" disabled={saving || busy || !selectedUser}>
+          {saving ? "儲存中..." : "更新 Bio"}
+        </button>
+      </div>
+      <textarea
+        value={bio}
+        placeholder="補充你的偏好、背景或想讓角色知道的事"
+        onChange={(event) => setBio(event.target.value)}
+        disabled={saving || busy || !selectedUser}
+      />
+      <details className="profile-add">
+        <summary>新增另一位使用者</summary>
+        <div className="profile-add-grid">
+          <input
+            value={name}
+            placeholder="新使用者名稱"
+            onChange={(event) => setName(event.target.value)}
+            disabled={saving || busy}
+          />
+          <button
+            type="button"
+            disabled={saving || busy || !name.trim()}
+            onClick={(event) => handleCreate(event, "")}
+          >
+            建立
+          </button>
+        </div>
+      </details>
+      {profileError ? <p className="error">{profileError}</p> : null}
+    </form>
   );
 }
