@@ -195,12 +195,8 @@ def _parse_curator_decision(raw_output: str) -> CuratorDecision:
     except (json.JSONDecodeError, ValidationError) as exc:
         raise ProviderError(f"Memory curator returned invalid JSON: {exc}") from exc
     if not decision.should_store:
-        return CuratorDecision(should_store=False, memories=[])
-    memories = [
-        memory
-        for memory in decision.memories
-        if memory.sensitivity == "normal" and memory.content.strip()
-    ]
+        return decision
+    memories = [m for m in decision.memories if m.sensitivity == "normal" and m.content.strip()]
     return CuratorDecision(should_store=bool(memories), memories=memories)
 
 

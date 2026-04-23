@@ -109,10 +109,13 @@ class SessionStore:
             )
             self._conn.commit()
             user_id = int(cursor.lastrowid)
-        user = self.get_user(user_id)
-        if user is None:  # pragma: no cover - defensive consistency check
-            raise RuntimeError("Created user could not be loaded.")
-        return user
+        return {
+            "id": user_id,
+            "name": clean_name,
+            "bio": clean_bio,
+            "created_at": timestamp,
+            "updated_at": timestamp,
+        }
 
     def list_users(self) -> list[dict[str, Any]]:
         with _locked(self._lock):
@@ -152,6 +155,7 @@ class SessionStore:
 
         next_name = existing["name"] if name is None else name.strip()
         next_bio = existing["bio"] if bio is None else bio.strip()
+        updated_at = now_iso()
         with _locked(self._lock):
             self._conn.execute(
                 """
@@ -159,10 +163,10 @@ class SessionStore:
                 SET name = ?, bio = ?, updated_at = ?
                 WHERE id = ?
                 """,
-                (next_name, next_bio, now_iso(), user_id),
+                (next_name, next_bio, updated_at, user_id),
             )
             self._conn.commit()
-        return self.get_user(user_id)
+        return {**existing, "name": next_name, "bio": next_bio, "updated_at": updated_at}
 
     def add_message(
         self,

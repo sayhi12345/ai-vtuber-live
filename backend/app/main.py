@@ -4,8 +4,6 @@ import asyncio
 import logging
 import time
 from collections.abc import AsyncIterator
-from datetime import datetime, timezone
-
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
@@ -27,11 +25,11 @@ from app.models import (
     UserCreateRequest,
     UserUpdateRequest,
 )
-from app.pipeline import SegmentAccumulator, detect_emotion, sse_pack
+from app.pipeline import SegmentAccumulator, detect_emotion, sse_pack, summarize_for_log
 from app.providers.base import ProviderError
 from app.providers.registry import ProviderRegistry
 from app.safety import SafetyPipeline
-from app.session_store import SessionControl, SessionEventBus, SessionStore, StageEvent
+from app.session_store import SessionControl, SessionEventBus, SessionStore, StageEvent, now_iso
 
 logger = logging.getLogger(__name__)
 
@@ -61,24 +59,14 @@ if not characters.has(settings.default_character_id):
     )
 
 
-def _now_iso() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
 def _provider_name(requested: str | None, default_name: str) -> str:
     return (requested or default_name).lower()
 
 
-def _summarize_for_log(text: str, limit: int = 80) -> str:
-    normalized = " ".join(text.split())
-    if len(normalized) <= limit:
-        return normalized
-    return f"{normalized[: limit - 1]}…"
-
 
 @app.get("/health")
 async def health() -> dict[str, str]:
-    return {"status": "ok", "time": _now_iso()}
+    return {"status": "ok", "time": now_iso()}
 
 
 @app.get("/api/characters")
@@ -235,25 +223,33 @@ async def chat_stream(payload: ChatStreamRequest):
             return
 
         store.add_message(session_id, "user", safe_input.text, payload.user_id, character_id)
-        try:
-            relevant_memories = await memory_service.search_memories(
-                query=safe_input.text,
-                user_id=payload.user_id,
-                character_id=character_id,
-                limit=settings.memory_search_limit,
-            )
-        except Exception as exc:
-            logger.warning("Mem0 search failed: %s", exc)
-            store.log_error(
-                session_id,
-                "memory_search",
-                str(exc),
-                {"user_id": payload.user_id, "character_id": character_id},
-            )
-            relevant_memories = []
-        history = store.get_scoped_history(payload.user_id, character_id, settings.history_limit)
+
+        async def _search_memories() -> list[MemoryRecord]:
+            try:
+                return await memory_service.search_memories(
+                    query=safe_input.text,
+                    user_id=payload.user_id,
+                    character_id=character_id,
+                    limit=settings.memory_search_limit,
+                )
+            except Exception as exc:
+                logger.warning("Mem0 search failed: %s", exc)
+                store.log_error(
+                    session_id,
+                    "memory_search",
+                    str(exc),
+                    {"user_id": payload.user_id, "character_id": character_id},
+                )
+                return []
+
+        relevant_memories, history = await asyncio.gather(
+            _search_memories(),
+            asyncio.to_thread(
+                store.get_scoped_history, payload.user_id, character_id, settings.history_limit
+            ),
+        )
         route = agent_router.decide(safe_input.text)
-        print(f'Chat stream selected route: session_id={session_id} mode={route.mode} skills={route.skill_names} message={_summarize_for_log(safe_input.text)}')
+        print(f'Chat stream selected route: session_id={session_id} mode={route.mode} skills={route.skill_names} message={summarize_for_log(safe_input.text)}')
         accumulator = SegmentAccumulator()
         full_output_parts: list[str] = []
         segment_index = 0
@@ -265,7 +261,7 @@ async def chat_stream(payload: ChatStreamRequest):
             "tts_provider": tts_provider_name,
             "mode": route.mode,
             "skills": route.skill_names,
-            "timestamp": _now_iso(),
+            "timestamp": now_iso(),
         }
         yield sse_pack("start", start_payload)
         await events.publish(session_id, StageEvent(event="start", payload=start_payload))

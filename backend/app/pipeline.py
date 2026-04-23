@@ -37,6 +37,13 @@ class SegmentAccumulator:
         return remaining
 
 
+def summarize_for_log(text: str, limit: int = 80) -> str:
+    normalized = " ".join(text.split())
+    if len(normalized) <= limit:
+        return normalized
+    return f"{normalized[: limit - 1]}…"
+
+
 def detect_emotion(text: str) -> str:
     source = text.lower()
     if any(token in source for token in ["驚", "wow", "surprise", "真的假的"]):
