@@ -29,6 +29,10 @@ class Settings:
     debug: bool = _bool_env("DEBUG", False)
 
     allowed_origins: list[str] = None  # type: ignore[assignment]
+    allowed_origin_regex: str | None = os.getenv(
+        "ALLOWED_ORIGIN_REGEX",
+        r"https?://(localhost|127\.0\.0\.1):\d+",
+    )
 
     default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "openai")
     default_tts_provider: str = os.getenv("DEFAULT_TTS_PROVIDER", "qwen")
