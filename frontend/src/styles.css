@@ -398,6 +398,12 @@ input {
 .error {
   color: var(--err);
   margin: 2px 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  border: 1px solid rgba(241, 125, 125, 0.35);
+  background: rgba(241, 125, 125, 0.08);
+  font-size: 0.88rem;
+  line-height: 1.4;
 }
 
 .stage-only {

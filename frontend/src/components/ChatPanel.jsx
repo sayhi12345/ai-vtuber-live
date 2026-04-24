@@ -122,7 +122,7 @@ export default function ChatPanel({
         ) : null}
       </div>
 
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <p className="error" role="alert">{error}</p> : null}
 
       <form className="composer" onSubmit={onSubmit}>
         <textarea
