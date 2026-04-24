@@ -231,13 +231,15 @@ button:disabled {
 
 .provider-row {
   display: flex;
-  gap: 10px;
+  flex-wrap: wrap;
+  gap: 10px 14px;
 }
 
 .provider-row label {
   display: flex;
   gap: 6px;
   align-items: center;
+  white-space: nowrap;
 }
 
 select {
