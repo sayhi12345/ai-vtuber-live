@@ -193,6 +193,22 @@ body {
   font-size: 0.85rem;
 }
 
+.section-label {
+  margin: 8px 0 2px;
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--muted);
+  border-top: 1px solid var(--line);
+  padding-top: 10px;
+}
+
+.chat-panel > .section-label:first-of-type {
+  border-top: 0;
+  padding-top: 0;
+}
+
 .row {
   display: flex;
   align-items: center;
