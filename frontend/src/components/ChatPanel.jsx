@@ -51,6 +51,7 @@ export default function ChatPanel({
         </div>
       </header>
 
+      <h2 className="section-label">Character</h2>
       <div className="provider-row">
         <label>
           角色
@@ -90,6 +91,7 @@ export default function ChatPanel({
         <p className="muted character-desc">{currentCharacter.short_description}</p>
       ) : null}
 
+      <h2 className="section-label">Profile</h2>
       <UserProfilePanel
         users={users}
         selectedUser={selectedUser}
@@ -102,12 +104,12 @@ export default function ChatPanel({
       />
 
       <div className="stage-link">
-        Stage View:
         <a href={stageUrl} target="_blank" rel="noreferrer">
-          {stageUrl}
+          Open Stage View ↗
         </a>
       </div>
 
+      <h2 className="section-label">Conversation</h2>
       <div className="transcript">
         {messages.map((message) => (
           <article key={message.id} className={`bubble ${message.role}`}>
@@ -123,7 +125,7 @@ export default function ChatPanel({
         ) : null}
       </div>
 
-      {error ? <p className="error">{error}</p> : null}
+      {error ? <p className="error" role="alert">{error}</p> : null}
 
       <form className="composer" onSubmit={onSubmit}>
         <textarea
