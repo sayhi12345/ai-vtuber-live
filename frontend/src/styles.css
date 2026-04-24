@@ -330,8 +330,7 @@ input {
 }
 
 .stage-link a {
-  margin-left: 6px;
-  color: var(--ok);
+  color: var(--accent);
 }
 
 .transcript {

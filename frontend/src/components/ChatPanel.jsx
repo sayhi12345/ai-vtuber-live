@@ -102,9 +102,8 @@ export default function ChatPanel({
       />
 
       <div className="stage-link">
-        Stage View:
         <a href={stageUrl} target="_blank" rel="noreferrer">
-          {stageUrl}
+          Open Stage View ↗
         </a>
       </div>
 
