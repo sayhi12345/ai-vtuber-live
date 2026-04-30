@@ -76,6 +76,7 @@ export default function ChatPanel({
           <select value={llmProvider} onChange={(e) => onChangeLLM(e.target.value)}>
             <option value="openai">OpenAI</option>
             <option value="gemini">Gemini</option>
+            <option value="llamacpp">llama.cpp</option>
           </select>
         </label>
         <label>

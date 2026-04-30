@@ -47,6 +47,10 @@ class Settings:
         "用自然、活潑的語氣說話，像一位個性鮮明的 AI VTuber，語速適中，情感真實。",
     )
 
+    llamacpp_base_url: str = os.getenv("LLAMACPP_BASE_URL", "http://localhost:8088")
+    llamacpp_api_key: str | None = os.getenv("LLAMACPP_API_KEY")
+    llamacpp_chat_model: str = os.getenv("LLAMACPP_CHAT_MODEL", "local-model")
+
     gemini_api_key: str | None = os.getenv("GEMINI_API_KEY")
     gemini_base_url: str = os.getenv(
         "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com"

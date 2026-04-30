@@ -11,7 +11,7 @@ def now_iso() -> str:
 
 
 Role = Literal["system", "user", "assistant"]
-LLMProviderName = Literal["openai", "gemini"]
+LLMProviderName = Literal["openai", "gemini", "llamacpp"]
 TTSProviderName = Literal["openai", "gemini", "qwen"]
 
 
