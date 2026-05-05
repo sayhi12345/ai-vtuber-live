@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import time
+import uuid
 from collections.abc import AsyncIterator
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
@@ -31,6 +32,10 @@ from app.providers.registry import ProviderRegistry
 from app.safety import SafetyPipeline
 from app.session_store import SessionControl, SessionEventBus, SessionStore, StageEvent, now_iso
 
+logging.basicConfig(
+    level=logging.DEBUG if settings.debug else logging.INFO,
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title=settings.app_name, debug=settings.debug)
@@ -146,7 +151,11 @@ async def tts(payload: TTSRequest) -> Response:
         )
     except ProviderError as exc:
         store.log_error(payload.session_id, "tts", str(exc), {"provider": provider_name})
-        raise HTTPException(status_code=502, detail=str(exc)) from exc
+        logger.warning("TTS provider error (%s): %s", provider_name, exc)
+        raise HTTPException(
+            status_code=502,
+            detail=f"TTS provider '{provider_name}' is unavailable.",
+        ) from exc
 
     elapsed_ms = (time.perf_counter() - start) * 1000
     store.log_metric(
@@ -249,7 +258,13 @@ async def chat_stream(payload: ChatStreamRequest):
             ),
         )
         route = agent_router.decide(safe_input.text)
-        print(f'Chat stream selected route: session_id={session_id} mode={route.mode} skills={route.skill_names} message={summarize_for_log(safe_input.text)}')
+        logger.info(
+            "Chat stream selected route: session_id=%s mode=%s skills=%s message=%s",
+            session_id,
+            route.mode,
+            route.skill_names,
+            summarize_for_log(safe_input.text),
+        )
         accumulator = SegmentAccumulator()
         full_output_parts: list[str] = []
         segment_index = 0
@@ -277,7 +292,7 @@ async def chat_stream(payload: ChatStreamRequest):
             metric_provider_name = llm_provider_name
 
             if route.use_agent:
-                print(
+                logger.info(
                     "Chat stream dispatching request to agent runtime: session_id=%s mode=%s skills=%s llm_provider=%s",
                     session_id,
                     route.mode,
@@ -324,7 +339,9 @@ async def chat_stream(payload: ChatStreamRequest):
 
                 safe_chunk = safety.filter_output(chunk).text
                 full_output_parts.append(safe_chunk)
-                yield sse_pack("delta", {"text": safe_chunk})
+                delta_payload = {"text": safe_chunk}
+                yield sse_pack("delta", delta_payload)
+                await events.publish(session_id, StageEvent(event="delta", payload=delta_payload))
 
                 for segment in accumulator.feed(safe_chunk):
                     safe_segment = safety.filter_output(segment).text
@@ -476,4 +493,12 @@ async def _curate_and_store_memory(
 
 @app.exception_handler(Exception)
 async def unhandled_exception_handler(_, exc: Exception):
-    return JSONResponse(status_code=500, content={"detail": str(exc)})
+    request_id = uuid.uuid4().hex
+    logger.exception("Unhandled exception (request_id=%s)", request_id)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error.",
+            "request_id": request_id,
+        },
+    )

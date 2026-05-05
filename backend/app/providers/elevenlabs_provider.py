@@ -1,11 +1,27 @@
 from __future__ import annotations
 
-import random
+import logging
 
 import httpx
 
 from app.config import settings
 from app.providers.base import ProviderError, TTSProvider
+
+logger = logging.getLogger(__name__)
+
+
+def _map_status_to_message(status: int) -> str:
+    if status == 401:
+        return "ElevenLabs auth failed — check ELEVENLABS_API_KEY."
+    if status == 404:
+        return "ElevenLabs voice not found — check ELEVENLABS_VOICE_ID."
+    if status == 422:
+        return "ElevenLabs rejected the request (invalid voice or parameters)."
+    if status == 429:
+        return "ElevenLabs rate limit hit — try again in a moment."
+    if 500 <= status < 600:
+        return "ElevenLabs is having issues — try again shortly."
+    return "ElevenLabs TTS request failed."
 
 # Expressive presets driving ElevenLabs voice_settings. Each entry tweaks
 # stability (lower = more variation), similarity_boost (higher = closer to the
@@ -79,7 +95,12 @@ class ElevenLabsProvider(TTSProvider):
     ) -> tuple[bytes, str]:
         voice_id = voice or settings.elevenlabs_voice_id
         resolved, voice_settings = self._resolve_emotion(emotion)
-        print(f"elevenlabs synthesize: voice={voice_id} emotion={emotion or '(none)'} -> {resolved}")
+        logger.debug(
+            "elevenlabs synthesize: voice=%s emotion=%s -> %s",
+            voice_id,
+            emotion or "(none)",
+            resolved,
+        )
 
         body = {
             "text": text,
@@ -104,9 +125,12 @@ class ElevenLabsProvider(TTSProvider):
         ) as response:
             if response.status_code >= 400:
                 body_text = (await response.aread()).decode(errors="replace")[:500]
-                raise ProviderError(
-                    f"ElevenLabs TTS failed: {response.status_code} {body_text}"
+                logger.warning(
+                    "ElevenLabs TTS upstream error: status=%s body=%s",
+                    response.status_code,
+                    body_text,
                 )
+                raise ProviderError(_map_status_to_message(response.status_code))
             async for chunk in response.aiter_bytes(chunk_size=4096):
                 chunks.append(chunk)
 
