@@ -33,6 +33,8 @@ from app.models import (
     ReadyEventData,
     SegmentEventData,
     SessionControlRequest,
+    SessionCreateRequest,
+    SessionInfo,
     SessionMuteRequest,
     StartEventData,
     StoppedEventData,
@@ -184,6 +186,34 @@ async def update_user(user_id: int, payload: UserUpdateRequest) -> dict[str, obj
     if user is None:
         raise _http_error(404, "user_not_found", "Unknown user_id")
     return {"user": user}
+
+
+@app.post("/api/sessions", response_model=SessionInfo, status_code=201)
+async def create_session(payload: SessionCreateRequest) -> SessionInfo:
+    """Mint a server-side session_id.
+
+    Frontends should call this once at the start of a conversation and pass
+    the returned `session_id` to chat/tts/stage/control endpoints. The id is
+    a UUID4 hex string with no business meaning — sessions are an
+    in-process bag of state (controls, event bus, message history).
+
+    The server does not yet enforce that downstream endpoints reference an
+    id minted here — that gate lands separately.
+    """
+    if payload.user_id is not None and store.get_user(payload.user_id) is None:
+        raise _http_error(404, "user_not_found", "Unknown user_id")
+    character_id = payload.character_id
+    if character_id is not None and not characters.has(character_id):
+        raise _http_error(
+            422, "character_not_found", f"Unknown character_id: {character_id}"
+        )
+    session_id = uuid.uuid4().hex
+    return SessionInfo(
+        session_id=session_id,
+        user_id=payload.user_id,
+        character_id=character_id,
+        created_at=now_iso(),
+    )
 
 
 @app.post("/api/session/reset")

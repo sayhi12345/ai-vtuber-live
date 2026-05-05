@@ -71,6 +71,18 @@ class SessionMuteRequest(SessionControlRequest):
     muted: bool
 
 
+class SessionCreateRequest(BaseModel):
+    user_id: int | None = Field(default=None, ge=1)
+    character_id: str | None = Field(default=None, max_length=64)
+
+
+class SessionInfo(BaseModel):
+    session_id: str
+    user_id: int | None = None
+    character_id: str | None = None
+    created_at: str
+
+
 # --- Unified error envelope ---------------------------------------------------
 # Every HTTP error response is `{"error": ErrorPayload}`. SSE `error` events
 # emit the inner `ErrorPayload` directly as the event data.
