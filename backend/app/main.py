@@ -5,7 +5,8 @@ import logging
 import time
 import uuid
 from collections.abc import AsyncIterator
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
@@ -19,9 +20,22 @@ from app.memory import (
     compose_memory_context,
 )
 from app.models import (
+    API_VERSION,
+    SSE_EVENT_NAMES,
+    CapabilitiesResponse,
     ChatStreamRequest,
+    DeltaEventData,
+    DoneEventData,
+    ErrorPayload,
+    ErrorResponse,
+    MetricEventData,
+    MuteEventData,
+    ReadyEventData,
+    SegmentEventData,
     SessionControlRequest,
     SessionMuteRequest,
+    StartEventData,
+    StoppedEventData,
     TTSRequest,
     UserCreateRequest,
     UserUpdateRequest,
@@ -68,6 +82,31 @@ def _provider_name(requested: str | None, default_name: str) -> str:
     return (requested or default_name).lower()
 
 
+def _http_error(
+    status: int,
+    code: str,
+    message: str,
+    *,
+    retryable: bool = False,
+) -> HTTPException:
+    return HTTPException(
+        status_code=status,
+        detail={"code": code, "message": message, "retryable": retryable},
+    )
+
+
+def _build_error_payload(
+    code: str,
+    message: str,
+    *,
+    retryable: bool = False,
+    request_id: str | None = None,
+) -> ErrorPayload:
+    return ErrorPayload(
+        code=code, message=message, retryable=retryable, request_id=request_id
+    )
+
+
 
 @app.get("/health")
 async def health() -> dict[str, str]:
@@ -82,6 +121,24 @@ async def list_characters() -> dict[str, object]:
     }
 
 
+@app.get("/api/capabilities", response_model=CapabilitiesResponse)
+async def capabilities() -> CapabilitiesResponse:
+    """Self-describing endpoint for frontend bootstrap.
+
+    Lists enabled providers, the default character, and the SSE event
+    vocabulary so a fresh client can adapt without hardcoding.
+    """
+    return CapabilitiesResponse(
+        api_version=API_VERSION,
+        default_llm_provider=settings.default_llm_provider,
+        default_tts_provider=settings.default_tts_provider,
+        default_character_id=settings.default_character_id,
+        llm_providers=providers.available_llm_providers(),
+        tts_providers=providers.available_tts_providers(),
+        sse_events=SSE_EVENT_NAMES,
+    )
+
+
 @app.get("/api/users")
 async def list_users() -> dict[str, object]:
     return {"users": store.list_users()}
@@ -91,17 +148,17 @@ async def list_users() -> dict[str, object]:
 async def create_user(payload: UserCreateRequest) -> dict[str, object]:
     name = payload.name.strip()
     if not name:
-        raise HTTPException(status_code=422, detail="User name is required.")
+        raise _http_error(422, "invalid_request", "User name is required.")
     return {"user": store.create_user(name, payload.bio)}
 
 
 @app.patch("/api/users/{user_id}")
 async def update_user(user_id: int, payload: UserUpdateRequest) -> dict[str, object]:
     if payload.name is not None and not payload.name.strip():
-        raise HTTPException(status_code=422, detail="User name is required.")
+        raise _http_error(422, "invalid_request", "User name is required.")
     user = store.update_user(user_id, name=payload.name, bio=payload.bio)
     if user is None:
-        raise HTTPException(status_code=404, detail="Unknown user_id")
+        raise _http_error(404, "user_not_found", "Unknown user_id")
     return {"user": user}
 
 
@@ -116,8 +173,9 @@ async def reset_session(payload: SessionControlRequest) -> dict[str, str]:
 @app.post("/api/session/stop")
 async def stop_session(payload: SessionControlRequest) -> dict[str, str]:
     controls.request_stop(payload.session_id)
+    stopped_event = StoppedEventData(reason="manual_stop")
     await events.publish(
-        payload.session_id, StageEvent(event="stopped", payload={"reason": "manual_stop"})
+        payload.session_id, StageEvent(event="stopped", payload=stopped_event.model_dump())
     )
     return {"status": "ok", "session_id": payload.session_id}
 
@@ -125,8 +183,9 @@ async def stop_session(payload: SessionControlRequest) -> dict[str, str]:
 @app.post("/api/session/mute")
 async def mute_session(payload: SessionMuteRequest) -> dict[str, str | bool]:
     controls.set_mute(payload.session_id, payload.muted)
+    mute_event = MuteEventData(muted=payload.muted)
     await events.publish(
-        payload.session_id, StageEvent(event="mute", payload={"muted": payload.muted})
+        payload.session_id, StageEvent(event="mute", payload=mute_event.model_dump())
     )
     return {"status": "ok", "session_id": payload.session_id, "muted": payload.muted}
 
@@ -152,9 +211,11 @@ async def tts(payload: TTSRequest) -> Response:
     except ProviderError as exc:
         store.log_error(payload.session_id, "tts", str(exc), {"provider": provider_name})
         logger.warning("TTS provider error (%s): %s", provider_name, exc)
-        raise HTTPException(
-            status_code=502,
-            detail=f"TTS provider '{provider_name}' is unavailable.",
+        raise _http_error(
+            502,
+            "tts_provider_unavailable",
+            f"TTS provider '{provider_name}' is unavailable.",
+            retryable=True,
         ) from exc
 
     elapsed_ms = (time.perf_counter() - start) * 1000
@@ -174,7 +235,7 @@ async def stage_stream(session_id: str = Query(..., min_length=1, max_length=128
 
     async def generator():
         try:
-            yield sse_pack("ready", {"session_id": session_id})
+            yield sse_pack("ready", ReadyEventData(session_id=session_id))
             while True:
                 event = await queue.get()
                 yield sse_pack(event.event, event.payload)
@@ -202,9 +263,11 @@ async def chat_stream(payload: ChatStreamRequest):
     character_id = payload.character_id or settings.default_character_id
     user = store.get_user(payload.user_id)
     if user is None:
-        raise HTTPException(status_code=400, detail="Unknown user_id")
+        raise _http_error(404, "user_not_found", "Unknown user_id")
     if not characters.has(character_id):
-        raise HTTPException(status_code=400, detail=f"Unknown character_id: {character_id}")
+        raise _http_error(
+            422, "character_not_found", f"Unknown character_id: {character_id}"
+        )
     character = characters.get(character_id)
     persona = character.to_system_prompt()
 
@@ -221,14 +284,15 @@ async def chat_stream(payload: ChatStreamRequest):
                 safe_input.reason or "Input blocked",
                 {"original_len": len(payload.message)},
             )
-            blocked_payload = {
-                "message": "訊息包含高風險內容，已被系統攔截。",
-                "reason": safe_input.reason,
-            }
-            yield sse_pack("error", blocked_payload)
-            yield sse_pack("done", {"text": "", "blocked": True})
-            await events.publish(session_id, StageEvent(event="error", payload=blocked_payload))
-            await events.publish(session_id, StageEvent(event="done", payload={"text": ""}))
+            blocked_error = _build_error_payload(
+                code="safety_blocked",
+                message="訊息包含高風險內容，已被系統攔截。",
+            )
+            done_blocked = DoneEventData(text="", blocked=True)
+            yield sse_pack("error", blocked_error)
+            yield sse_pack("done", done_blocked)
+            await events.publish(session_id, StageEvent(event="error", payload=blocked_error.model_dump(exclude_none=True)))
+            await events.publish(session_id, StageEvent(event="done", payload=done_blocked.model_dump()))
             return
 
         store.add_message(session_id, "user", safe_input.text, payload.user_id, character_id)
@@ -270,16 +334,16 @@ async def chat_stream(payload: ChatStreamRequest):
         segment_index = 0
         first_chunk_at: float | None = None
 
-        start_payload = {
-            "session_id": session_id,
-            "llm_provider": llm_provider_name,
-            "tts_provider": tts_provider_name,
-            "mode": route.mode,
-            "skills": route.skill_names,
-            "timestamp": now_iso(),
-        }
-        yield sse_pack("start", start_payload)
-        await events.publish(session_id, StageEvent(event="start", payload=start_payload))
+        start_event = StartEventData(
+            session_id=session_id,
+            llm_provider=llm_provider_name,
+            tts_provider=tts_provider_name,
+            mode=route.mode,
+            skills=route.skill_names,
+            timestamp=now_iso(),
+        )
+        yield sse_pack("start", start_event)
+        await events.publish(session_id, StageEvent(event="start", payload=start_event.model_dump()))
 
         try:
             reply_stream: AsyncIterator[str]
@@ -319,10 +383,11 @@ async def chat_stream(payload: ChatStreamRequest):
 
             async for chunk in reply_stream:
                 if controls.should_stop(session_id):
-                    stopped_payload = {"reason": "manual_stop"}
-                    yield sse_pack("stopped", stopped_payload)
+                    stopped_event = StoppedEventData(reason="manual_stop")
+                    yield sse_pack("stopped", stopped_event)
                     await events.publish(
-                        session_id, StageEvent(event="stopped", payload=stopped_payload)
+                        session_id,
+                        StageEvent(event="stopped", payload=stopped_event.model_dump()),
                     )
                     break
 
@@ -334,28 +399,29 @@ async def chat_stream(payload: ChatStreamRequest):
                     )
                     yield sse_pack(
                         "metric",
-                        {"event": "llm_ttft_ms", "value_ms": round(ttft_ms, 2)},
+                        MetricEventData(event="llm_ttft_ms", value_ms=round(ttft_ms, 2)),
                     )
 
                 safe_chunk = safety.filter_output(chunk).text
                 full_output_parts.append(safe_chunk)
-                delta_payload = {"text": safe_chunk}
-                yield sse_pack("delta", delta_payload)
-                await events.publish(session_id, StageEvent(event="delta", payload=delta_payload))
+                delta_event = DeltaEventData(text=safe_chunk)
+                yield sse_pack("delta", delta_event)
+                await events.publish(session_id, StageEvent(event="delta", payload=delta_event.model_dump()))
 
                 for segment in accumulator.feed(safe_chunk):
                     safe_segment = safety.filter_output(segment).text
                     emotion = detect_emotion(safe_segment)
-                    segment_payload = {
-                        "index": segment_index,
-                        "text": safe_segment,
-                        "emotion": emotion,
-                        "tts_provider": tts_provider_name,
-                    }
+                    segment_event = SegmentEventData(
+                        index=segment_index,
+                        text=safe_segment,
+                        emotion=emotion,
+                        tts_provider=tts_provider_name,
+                    )
                     segment_index += 1
-                    yield sse_pack("segment", segment_payload)
+                    yield sse_pack("segment", segment_event)
                     await events.publish(
-                        session_id, StageEvent(event="segment", payload=segment_payload)
+                        session_id,
+                        StageEvent(event="segment", payload=segment_event.model_dump()),
                     )
         except ProviderError as exc:
             store.log_error(
@@ -364,30 +430,40 @@ async def chat_stream(payload: ChatStreamRequest):
                 str(exc),
                 {"provider": llm_provider_name},
             )
-            error_payload = {"message": f"LLM provider error: {exc}"}
-            yield sse_pack("error", error_payload)
-            await events.publish(session_id, StageEvent(event="error", payload=error_payload))
+            llm_error = _build_error_payload(
+                code="llm_provider_unavailable",
+                message=f"LLM provider '{llm_provider_name}' is unavailable.",
+                retryable=True,
+            )
+            yield sse_pack("error", llm_error)
+            await events.publish(session_id, StageEvent(event="error", payload=llm_error.model_dump(exclude_none=True)))
             return
         except Exception as exc:  # pragma: no cover - unexpected path
             store.log_error(session_id, "chat_stream", str(exc), {})
-            error_payload = {"message": "Unexpected server error."}
-            yield sse_pack("error", error_payload)
-            await events.publish(session_id, StageEvent(event="error", payload=error_payload))
+            request_id = uuid.uuid4().hex
+            logger.exception("Unhandled chat_stream exception (request_id=%s)", request_id)
+            unhandled_error = _build_error_payload(
+                code="server_error",
+                message="Unexpected server error.",
+                request_id=request_id,
+            )
+            yield sse_pack("error", unhandled_error)
+            await events.publish(session_id, StageEvent(event="error", payload=unhandled_error.model_dump(exclude_none=True)))
             return
 
         tail = accumulator.flush()
         if tail:
             safe_tail = safety.filter_output(tail).text
             emotion = detect_emotion(safe_tail)
-            segment_payload = {
-                "index": segment_index,
-                "text": safe_tail,
-                "emotion": emotion,
-                "tts_provider": tts_provider_name,
-            }
+            tail_event = SegmentEventData(
+                index=segment_index,
+                text=safe_tail,
+                emotion=emotion,
+                tts_provider=tts_provider_name,
+            )
             full_output_parts.append(safe_tail)
-            yield sse_pack("segment", segment_payload)
-            await events.publish(session_id, StageEvent(event="segment", payload=segment_payload))
+            yield sse_pack("segment", tail_event)
+            await events.publish(session_id, StageEvent(event="segment", payload=tail_event.model_dump()))
 
         full_text = "".join(full_output_parts).strip()
         if full_text:
@@ -395,11 +471,14 @@ async def chat_stream(payload: ChatStreamRequest):
 
         total_ms = (time.perf_counter() - turn_start) * 1000
         store.log_metric(session_id, "turn_total_ms", total_ms, llm_provider_name)
-        yield sse_pack("metric", {"event": "turn_total_ms", "value_ms": round(total_ms, 2)})
+        yield sse_pack(
+            "metric",
+            MetricEventData(event="turn_total_ms", value_ms=round(total_ms, 2)),
+        )
 
-        done_payload = {"text": full_text, "blocked": False}
-        yield sse_pack("done", done_payload)
-        await events.publish(session_id, StageEvent(event="done", payload=done_payload))
+        done_event = DoneEventData(text=full_text, blocked=False)
+        yield sse_pack("done", done_event)
+        await events.publish(session_id, StageEvent(event="done", payload=done_event.model_dump()))
         if full_text and memory_service.enabled:
             asyncio.create_task(
                 _curate_and_store_memory(
@@ -491,14 +570,56 @@ async def _curate_and_store_memory(
         )
 
 
+@app.exception_handler(HTTPException)
+async def http_exception_handler(_: Request, exc: HTTPException):
+    detail = exc.detail
+    if isinstance(detail, dict) and "code" in detail and "message" in detail:
+        payload = ErrorPayload(
+            code=detail["code"],
+            message=detail["message"],
+            retryable=bool(detail.get("retryable", False)),
+            request_id=detail.get("request_id"),
+        )
+    else:
+        payload = ErrorPayload(
+            code=f"http_{exc.status_code}",
+            message=str(detail) if detail else "Request failed.",
+            retryable=exc.status_code >= 500,
+        )
+    return JSONResponse(
+        status_code=exc.status_code,
+        content=ErrorResponse(error=payload).model_dump(exclude_none=True),
+        headers=getattr(exc, "headers", None),
+    )
+
+
+@app.exception_handler(RequestValidationError)
+async def validation_exception_handler(_: Request, exc: RequestValidationError):
+    payload = ErrorPayload(
+        code="invalid_request",
+        message="Request body failed validation.",
+        retryable=False,
+    )
+    return JSONResponse(
+        status_code=422,
+        content={
+            "error": payload.model_dump(exclude_none=True),
+            "errors": exc.errors(),
+        },
+    )
+
+
 @app.exception_handler(Exception)
-async def unhandled_exception_handler(_, exc: Exception):
+async def unhandled_exception_handler(_: Request, exc: Exception):
     request_id = uuid.uuid4().hex
     logger.exception("Unhandled exception (request_id=%s)", request_id)
+    payload = ErrorPayload(
+        code="server_error",
+        message="Internal server error.",
+        request_id=request_id,
+        retryable=False,
+    )
     return JSONResponse(
         status_code=500,
-        content={
-            "detail": "Internal server error.",
-            "request_id": request_id,
-        },
+        content=ErrorResponse(error=payload).model_dump(exclude_none=True),
     )

@@ -1,11 +1,48 @@
 from __future__ import annotations
 
+from app.config import settings
 from app.providers.base import LLMProvider, ProviderError, TTSProvider
 from app.providers.elevenlabs_provider import ElevenLabsProvider
 from app.providers.gemini_provider import GeminiProvider
 from app.providers.llamacpp_provider import LlamaCppProvider
 from app.providers.openai_provider import OpenAIProvider
 from app.providers.qwen_provider import QwenProvider
+
+
+def _has(value: str | None) -> bool:
+    return bool(value)
+
+
+# Static capability map: which providers offer LLM, TTS, and how to detect
+# whether they're configured. Listed here once so /api/capabilities can answer
+# without instantiating heavy providers (qwen pulls torch/transformers).
+_PROVIDER_CAPABILITIES = {
+    "openai": {
+        "llm": True,
+        "tts": True,
+        "configured": lambda: _has(settings.openai_api_key),
+    },
+    "gemini": {
+        "llm": True,
+        "tts": True,
+        "configured": lambda: _has(settings.gemini_api_key),
+    },
+    "llamacpp": {
+        "llm": True,
+        "tts": False,
+        "configured": lambda: _has(settings.llamacpp_base_url),
+    },
+    "elevenlabs": {
+        "llm": False,
+        "tts": True,
+        "configured": lambda: _has(settings.elevenlabs_api_key),
+    },
+    "qwen": {
+        "llm": False,
+        "tts": True,
+        "configured": lambda: True,  # local model, always "configured"
+    },
+}
 
 
 class ProviderRegistry:
@@ -24,8 +61,22 @@ class ProviderRegistry:
             raise ProviderError(f"Provider {name} does not support TTS.")
         return provider
 
+    def available_llm_providers(self) -> list[str]:
+        return [
+            name
+            for name, caps in _PROVIDER_CAPABILITIES.items()
+            if caps["llm"] and caps["configured"]()
+        ]
+
+    def available_tts_providers(self) -> list[str]:
+        return [
+            name
+            for name, caps in _PROVIDER_CAPABILITIES.items()
+            if caps["tts"] and caps["configured"]()
+        ]
+
     def _get(self, name: str) -> object:
-        if name not in {"openai", "gemini", "qwen", "llamacpp", "elevenlabs"}:
+        if name not in _PROVIDER_CAPABILITIES:
             raise ProviderError(f"Unsupported provider: {name}")
         if name in self._instances:
             return self._instances[name]
