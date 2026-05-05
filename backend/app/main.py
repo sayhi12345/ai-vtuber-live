@@ -1,10 +1,8 @@
 from __future__ import annotations
 
-import asyncio
 import logging
 import time
 import uuid
-from collections.abc import AsyncIterator
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,40 +11,37 @@ from fastapi.responses import JSONResponse, Response, StreamingResponse
 from app.agents import DeepAgentRuntime, SelectiveAgentRouter
 from app.characters import load_default_registry
 from app.config import settings
-from app.memory import (
-    MemoryCuratorAgent,
-    MemoryRecord,
-    MemoryService,
-    compose_memory_context,
-)
+from app.memory import MemoryCuratorAgent, MemoryService
 from app.models import (
     API_VERSION,
     SSE_EVENT_NAMES,
     CapabilitiesResponse,
     ChatStreamRequest,
-    DeltaEventData,
-    DoneEventData,
     ErrorPayload,
     ErrorResponse,
-    MetricEventData,
     MuteEventData,
     ReadyEventData,
-    SegmentEventData,
     SessionControlRequest,
     SessionCreateRequest,
     SessionInfo,
     SessionMuteRequest,
-    StartEventData,
     StoppedEventData,
     TTSRequest,
     UserCreateRequest,
     UserUpdateRequest,
 )
-from app.pipeline import SegmentAccumulator, detect_emotion, sse_pack, summarize_for_log
+from app.pipeline import sse_pack
 from app.providers import build_default_registry
 from app.providers.base import ProviderError
 from app.safety import SafetyPipeline
-from app.session_store import SessionControl, SessionEventBus, SessionStore, StageEvent, now_iso
+from app.services.chat_turn import ChatTurnService
+from app.session_store import (
+    SessionControl,
+    SessionEventBus,
+    SessionStore,
+    StageEvent,
+    now_iso,
+)
 
 logging.basicConfig(
     level=logging.DEBUG if settings.debug else logging.INFO,
@@ -78,6 +73,20 @@ if not characters.has(settings.default_character_id):
     raise RuntimeError(
         f"DEFAULT_CHARACTER_ID '{settings.default_character_id}' is not defined in characters/definitions/."
     )
+
+chat_turn_service = ChatTurnService(
+    store=store,
+    safety=safety,
+    controls=controls,
+    events=events,
+    providers=providers,
+    agent_router=agent_router,
+    agent_runtime=agent_runtime,
+    memory_service=memory_service,
+    memory_curator=memory_curator,
+    characters=characters,
+    settings=settings,
+)
 
 
 def _provider_name(requested: str | None, default_name: str) -> str:
@@ -312,7 +321,12 @@ async def stage_stream(session_id: str = Query(..., min_length=1, max_length=128
 
 @app.post("/api/chat/stream")
 async def chat_stream(payload: ChatStreamRequest):
-    session_id = payload.session_id
+    """Stream a chat turn as SSE.
+
+    The route validates inputs and pre-resolves user/character; the actual
+    pipeline (safety → memory → routing → LLM → segmenting → metrics →
+    persistence → memory curation) lives in `ChatTurnService`.
+    """
     llm_provider_name = _provider_name(payload.llm_provider, settings.default_llm_provider)
     tts_provider_name = _provider_name(payload.tts_provider, settings.default_tts_provider)
     _validate_provider(llm_provider_name, "llm")
@@ -325,233 +339,12 @@ async def chat_stream(payload: ChatStreamRequest):
         raise _http_error(
             422, "character_not_found", f"Unknown character_id: {character_id}"
         )
-    character = characters.get(character_id)
-    persona = character.to_system_prompt()
 
     async def generator():
-        turn_start = time.perf_counter()
-        controls.clear_stop(session_id)
-        relevant_memories: list[MemoryRecord] = []
-
-        safe_input = safety.filter_input(payload.message)
-        if not safe_input.allowed:
-            store.log_error(
-                session_id,
-                "safety_input",
-                safe_input.reason or "Input blocked",
-                {"original_len": len(payload.message)},
-            )
-            blocked_error = _build_error_payload(
-                code="safety_blocked",
-                message="訊息包含高風險內容，已被系統攔截。",
-            )
-            done_blocked = DoneEventData(text="", blocked=True)
-            yield sse_pack("error", blocked_error)
-            yield sse_pack("done", done_blocked)
-            await events.publish(session_id, StageEvent(event="error", payload=blocked_error.model_dump(exclude_none=True)))
-            await events.publish(session_id, StageEvent(event="done", payload=done_blocked.model_dump()))
-            return
-
-        store.add_message(session_id, "user", safe_input.text, payload.user_id, character_id)
-
-        async def _search_memories() -> list[MemoryRecord]:
-            try:
-                return await memory_service.search_memories(
-                    query=safe_input.text,
-                    user_id=payload.user_id,
-                    character_id=character_id,
-                    limit=settings.memory_search_limit,
-                )
-            except Exception as exc:
-                logger.warning("Mem0 search failed: %s", exc)
-                store.log_error(
-                    session_id,
-                    "memory_search",
-                    str(exc),
-                    {"user_id": payload.user_id, "character_id": character_id},
-                )
-                return []
-
-        relevant_memories, history = await asyncio.gather(
-            _search_memories(),
-            asyncio.to_thread(
-                store.get_scoped_history, payload.user_id, character_id, settings.history_limit
-            ),
-        )
-        route = agent_router.decide(safe_input.text)
-        logger.info(
-            "Chat stream selected route: session_id=%s mode=%s skills=%s message=%s",
-            session_id,
-            route.mode,
-            route.skill_names,
-            summarize_for_log(safe_input.text),
-        )
-        accumulator = SegmentAccumulator()
-        full_output_parts: list[str] = []
-        segment_index = 0
-        first_chunk_at: float | None = None
-
-        start_event = StartEventData(
-            session_id=session_id,
-            llm_provider=llm_provider_name,
-            tts_provider=tts_provider_name,
-            mode=route.mode,
-            skills=route.skill_names,
-            timestamp=now_iso(),
-        )
-        yield sse_pack("start", start_event)
-        await events.publish(session_id, StageEvent(event="start", payload=start_event.model_dump()))
-
-        try:
-            reply_stream: AsyncIterator[str]
-            system_prompt = compose_memory_context(
-                system_prompt=persona,
-                user=user,
-                memories=relevant_memories,
-            )
-            llm_messages = history
-            metric_provider_name = llm_provider_name
-
-            if route.use_agent:
-                logger.info(
-                    "Chat stream dispatching request to agent runtime: session_id=%s mode=%s skills=%s llm_provider=%s",
-                    session_id,
-                    route.mode,
-                    route.skill_names,
-                    llm_provider_name,
-                )
-                metric_provider_name = f"agent:{llm_provider_name}"
-                reply_stream = agent_runtime.stream_reply(
-                    route=route,
-                    provider_name=llm_provider_name,
-                    messages=llm_messages,
-                    system_prompt=system_prompt,
-                    temperature=payload.temperature,
-                )
-            else:
-                logger.info(
-                    "Chat stream dispatching request to standard llm path: session_id=%s mode=%s llm_provider=%s",
-                    session_id,
-                    route.mode,
-                    llm_provider_name,
-                )
-                llm = providers.llm(llm_provider_name)
-                reply_stream = llm.stream_reply(llm_messages, system_prompt, payload.temperature)
-
-            async for chunk in reply_stream:
-                if controls.should_stop(session_id):
-                    stopped_event = StoppedEventData(reason="manual_stop")
-                    yield sse_pack("stopped", stopped_event)
-                    await events.publish(
-                        session_id,
-                        StageEvent(event="stopped", payload=stopped_event.model_dump()),
-                    )
-                    break
-
-                if first_chunk_at is None:
-                    first_chunk_at = time.perf_counter()
-                    ttft_ms = (first_chunk_at - turn_start) * 1000
-                    store.log_metric(
-                        session_id, "llm_ttft_ms", ttft_ms, metric_provider_name
-                    )
-                    yield sse_pack(
-                        "metric",
-                        MetricEventData(event="llm_ttft_ms", value_ms=round(ttft_ms, 2)),
-                    )
-
-                safe_chunk = safety.filter_output(chunk).text
-                full_output_parts.append(safe_chunk)
-                delta_event = DeltaEventData(text=safe_chunk)
-                yield sse_pack("delta", delta_event)
-                await events.publish(session_id, StageEvent(event="delta", payload=delta_event.model_dump()))
-
-                for segment in accumulator.feed(safe_chunk):
-                    safe_segment = safety.filter_output(segment).text
-                    emotion = detect_emotion(safe_segment)
-                    segment_event = SegmentEventData(
-                        index=segment_index,
-                        text=safe_segment,
-                        emotion=emotion,
-                        tts_provider=tts_provider_name,
-                    )
-                    segment_index += 1
-                    yield sse_pack("segment", segment_event)
-                    await events.publish(
-                        session_id,
-                        StageEvent(event="segment", payload=segment_event.model_dump()),
-                    )
-        except ProviderError as exc:
-            store.log_error(
-                session_id,
-                "llm",
-                str(exc),
-                {"provider": llm_provider_name},
-            )
-            llm_error = _build_error_payload(
-                code="llm_provider_unavailable",
-                message=f"LLM provider '{llm_provider_name}' is unavailable.",
-                retryable=True,
-            )
-            yield sse_pack("error", llm_error)
-            await events.publish(session_id, StageEvent(event="error", payload=llm_error.model_dump(exclude_none=True)))
-            return
-        except Exception as exc:  # pragma: no cover - unexpected path
-            store.log_error(session_id, "chat_stream", str(exc), {})
-            request_id = uuid.uuid4().hex
-            logger.exception("Unhandled chat_stream exception (request_id=%s)", request_id)
-            unhandled_error = _build_error_payload(
-                code="server_error",
-                message="Unexpected server error.",
-                request_id=request_id,
-            )
-            yield sse_pack("error", unhandled_error)
-            await events.publish(session_id, StageEvent(event="error", payload=unhandled_error.model_dump(exclude_none=True)))
-            return
-
-        tail = accumulator.flush()
-        if tail:
-            safe_tail = safety.filter_output(tail).text
-            emotion = detect_emotion(safe_tail)
-            tail_event = SegmentEventData(
-                index=segment_index,
-                text=safe_tail,
-                emotion=emotion,
-                tts_provider=tts_provider_name,
-            )
-            full_output_parts.append(safe_tail)
-            yield sse_pack("segment", tail_event)
-            await events.publish(session_id, StageEvent(event="segment", payload=tail_event.model_dump()))
-
-        full_text = "".join(full_output_parts).strip()
-        if full_text:
-            store.add_message(session_id, "assistant", full_text, payload.user_id, character_id)
-
-        total_ms = (time.perf_counter() - turn_start) * 1000
-        store.log_metric(session_id, "turn_total_ms", total_ms, llm_provider_name)
-        yield sse_pack(
-            "metric",
-            MetricEventData(event="turn_total_ms", value_ms=round(total_ms, 2)),
-        )
-
-        done_event = DoneEventData(text=full_text, blocked=False)
-        yield sse_pack("done", done_event)
-        await events.publish(session_id, StageEvent(event="done", payload=done_event.model_dump()))
-        if full_text and memory_service.enabled:
-            asyncio.create_task(
-                _curate_and_store_memory(
-                    session_id=session_id,
-                    user=user,
-                    character_id=character_id,
-                    character_name=character.profile.name,
-                    user_message=safe_input.text,
-                    assistant_response=full_text,
-                    existing_memories=relevant_memories,
-                    provider_name=_provider_name(
-                        settings.memory_curator_provider,
-                        llm_provider_name,
-                    ),
-                )
-            )
+        async for event_name, event_data in chat_turn_service.run(
+            payload=payload, user=user
+        ):
+            yield sse_pack(event_name, event_data)
 
     return StreamingResponse(
         generator(),
@@ -562,69 +355,6 @@ async def chat_stream(payload: ChatStreamRequest):
             "X-Accel-Buffering": "no",
         },
     )
-
-
-async def _curate_and_store_memory(
-    *,
-    session_id: str,
-    user: dict[str, object],
-    character_id: str,
-    character_name: str,
-    user_message: str,
-    assistant_response: str,
-    existing_memories: list[MemoryRecord],
-    provider_name: str,
-) -> None:
-    try:
-        decision = await memory_curator.curate(
-            user=user,
-            character_id=character_id,
-            character_name=character_name,
-            user_message=user_message,
-            assistant_response=assistant_response,
-            existing_memories=existing_memories,
-            provider_name=provider_name,
-        )
-    except Exception as exc:
-        logger.warning("Memory curator failed: %s", exc)
-        store.log_error(
-            session_id,
-            "memory_curator",
-            str(exc),
-            {"user_id": user.get("id"), "character_id": character_id},
-        )
-        return
-
-    if not decision.should_store:
-        return
-
-    records = [
-        MemoryRecord(
-            content=memory.content,
-            metadata={
-                "character_id": character_id,
-                "source": "chat",
-                "category": memory.category,
-                "sensitivity": memory.sensitivity,
-            },
-        )
-        for memory in decision.memories
-    ]
-    try:
-        await memory_service.add_memories(
-            memories=records,
-            user_id=int(user["id"]),
-            character_id=character_id,
-            run_id=session_id,
-        )
-    except Exception as exc:
-        logger.warning("Mem0 add failed: %s", exc)
-        store.log_error(
-            session_id,
-            "memory_add",
-            str(exc),
-            {"user_id": user.get("id"), "character_id": character_id},
-        )
 
 
 @app.exception_handler(HTTPException)
