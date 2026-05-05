@@ -41,8 +41,8 @@ from app.models import (
     UserUpdateRequest,
 )
 from app.pipeline import SegmentAccumulator, detect_emotion, sse_pack, summarize_for_log
+from app.providers import build_default_registry
 from app.providers.base import ProviderError
-from app.providers.registry import ProviderRegistry
 from app.safety import SafetyPipeline
 from app.session_store import SessionControl, SessionEventBus, SessionStore, StageEvent, now_iso
 
@@ -66,9 +66,9 @@ store = SessionStore(settings.sqlite_path)
 safety = SafetyPipeline(settings.safety_blocklist)
 controls = SessionControl()
 events = SessionEventBus()
-providers = ProviderRegistry()
+providers = build_default_registry()
 agent_router = SelectiveAgentRouter()
-agent_runtime = DeepAgentRuntime()
+agent_runtime = DeepAgentRuntime(providers)
 memory_service = MemoryService(settings.mem0_api_key, settings.mem0_enabled)
 memory_curator = MemoryCuratorAgent(providers)
 characters = load_default_registry()
@@ -80,6 +80,30 @@ if not characters.has(settings.default_character_id):
 
 def _provider_name(requested: str | None, default_name: str) -> str:
     return (requested or default_name).lower()
+
+
+def _validate_provider(name: str, capability: str) -> None:
+    """Reject unknown / mis-capability'd provider names at the route boundary.
+
+    capability is "llm" or "tts". Returns 422 with a stable error code rather
+    than letting a downstream ProviderError surface as 502.
+    """
+    if not providers.has(name):
+        raise _http_error(
+            422, "unsupported_provider", f"Unsupported provider: '{name}'."
+        )
+    available = (
+        providers.available_llm_providers()
+        if capability == "llm"
+        else providers.available_tts_providers()
+    )
+    if name not in available:
+        raise _http_error(
+            422,
+            "unsupported_provider",
+            f"Provider '{name}' is not available for {capability.upper()} "
+            f"(not registered for this capability or not configured).",
+        )
 
 
 def _http_error(
@@ -198,6 +222,7 @@ async def session_metrics(session_id: str) -> dict[str, object]:
 @app.post("/api/tts")
 async def tts(payload: TTSRequest) -> Response:
     provider_name = _provider_name(payload.provider, settings.default_tts_provider)
+    _validate_provider(provider_name, "tts")
     if controls.is_muted(payload.session_id):
         return Response(status_code=204)
 
@@ -260,6 +285,8 @@ async def chat_stream(payload: ChatStreamRequest):
     session_id = payload.session_id
     llm_provider_name = _provider_name(payload.llm_provider, settings.default_llm_provider)
     tts_provider_name = _provider_name(payload.tts_provider, settings.default_tts_provider)
+    _validate_provider(llm_provider_name, "llm")
+    _validate_provider(tts_provider_name, "tts")
     character_id = payload.character_id or settings.default_character_id
     user = store.get_user(payload.user_id)
     if user is None:

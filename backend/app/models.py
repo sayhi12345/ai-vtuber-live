@@ -13,8 +13,11 @@ def now_iso() -> str:
 API_VERSION = "1"
 
 Role = Literal["system", "user", "assistant"]
-LLMProviderName = Literal["openai", "gemini", "llamacpp"]
-TTSProviderName = Literal["openai", "gemini", "qwen", "elevenlabs"]
+# Provider names are validated at the route boundary against the runtime
+# ProviderRegistry (so adding a provider is a single edit). The schema stays
+# `str` to keep the API contract decoupled from compiled-in provider lists.
+LLMProviderName = str
+TTSProviderName = str
 
 SSEEventName = Literal[
     "ready", "start", "delta", "segment", "metric",

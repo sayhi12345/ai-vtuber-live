@@ -7,7 +7,12 @@ import httpx
 from langchain_openai import ChatOpenAI
 
 from app.config import settings
-from app.providers.base import LLMProvider, ProviderError, TTSProvider
+from app.providers.base import (
+    LLMProvider,
+    ProviderDescriptor,
+    ProviderError,
+    TTSProvider,
+)
 from app.providers.langchain_utils import build_langchain_messages, extract_text_content
 
 # gpt-4o-mini-tts 情緒語氣映射
@@ -133,3 +138,27 @@ class OpenAIProvider(LLMProvider, TTSProvider):
                 chunks.append(chunk)
 
         return b"".join(chunks), "audio/ogg"
+
+
+def _build_langchain_model(temperature: float) -> ChatOpenAI:
+    _, api_base_url = _normalize_openai_urls(settings.openai_base_url.rstrip("/"))
+    return ChatOpenAI(
+        model=settings.openai_chat_model,
+        api_key=settings.openai_api_key,
+        base_url=api_base_url,
+        temperature=temperature,
+        streaming=True,
+    )
+
+
+def register(registry) -> None:
+    registry.register(
+        ProviderDescriptor(
+            name="openai",
+            factory=OpenAIProvider,
+            is_configured=lambda: bool(settings.openai_api_key),
+            supports_llm=True,
+            supports_tts=True,
+            langchain_factory=_build_langchain_model,
+        )
+    )

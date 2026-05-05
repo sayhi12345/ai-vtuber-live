@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from app.config import settings
-from app.providers.base import ProviderError, TTSProvider
+from app.providers.base import ProviderDescriptor, ProviderError, TTSProvider
 
 logger = logging.getLogger(__name__)
 
@@ -228,3 +228,14 @@ def _wav_bytes(waveform: Any, sample_rate: int) -> bytes:
             wav_file.setframerate(sample_rate)
             wav_file.writeframes(pcm.tobytes())
         return buffer.getvalue()
+
+
+def register(registry) -> None:
+    registry.register(
+        ProviderDescriptor(
+            name="qwen",
+            factory=QwenProvider,
+            is_configured=lambda: True,  # local model, always available
+            supports_tts=True,
+        )
+    )
