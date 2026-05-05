@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from app.providers.base import LLMProvider, ProviderError, TTSProvider
+from app.providers.elevenlabs_provider import ElevenLabsProvider
 from app.providers.gemini_provider import GeminiProvider
 from app.providers.llamacpp_provider import LlamaCppProvider
 from app.providers.openai_provider import OpenAIProvider
@@ -24,7 +25,7 @@ class ProviderRegistry:
         return provider
 
     def _get(self, name: str) -> object:
-        if name not in {"openai", "gemini", "qwen", "llamacpp"}:
+        if name not in {"openai", "gemini", "qwen", "llamacpp", "elevenlabs"}:
             raise ProviderError(f"Unsupported provider: {name}")
         if name in self._instances:
             return self._instances[name]
@@ -34,6 +35,8 @@ class ProviderRegistry:
             provider = GeminiProvider()
         elif name == "llamacpp":
             provider = LlamaCppProvider()
+        elif name == "elevenlabs":
+            provider = ElevenLabsProvider()
         else:
             provider = QwenProvider()
         self._instances[name] = provider

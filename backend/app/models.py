@@ -12,7 +12,7 @@ def now_iso() -> str:
 
 Role = Literal["system", "user", "assistant"]
 LLMProviderName = Literal["openai", "gemini", "llamacpp"]
-TTSProviderName = Literal["openai", "gemini", "qwen"]
+TTSProviderName = Literal["openai", "gemini", "qwen", "elevenlabs"]
 
 
 class ChatMessage(BaseModel):

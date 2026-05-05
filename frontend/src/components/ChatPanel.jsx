@@ -85,6 +85,7 @@ export default function ChatPanel({
             <option value="qwen">Qwen Local</option>
             <option value="openai">OpenAI</option>
             <option value="gemini">Gemini</option>
+            <option value="elevenlabs">ElevenLabs</option>
           </select>
         </label>
       </div>

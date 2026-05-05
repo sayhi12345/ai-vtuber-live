@@ -61,6 +61,17 @@ class Settings:
     )
     gemini_tts_voice: str = os.getenv("GEMINI_TTS_VOICE", "Leda")
 
+    elevenlabs_api_key: str | None = os.getenv("ELEVENLABS_API_KEY")
+    elevenlabs_base_url: str = os.getenv(
+        "ELEVENLABS_BASE_URL", "https://api.elevenlabs.io"
+    )
+    elevenlabs_model: str = os.getenv("ELEVENLABS_MODEL", "eleven_multilingual_v2")
+    # Default voice: Rachel (21m00Tcm4TlvDq8ikWAM) — public preset on every account.
+    # Override with ELEVENLABS_VOICE_ID to use a custom or cloned voice.
+    elevenlabs_voice_id: str = os.getenv(
+        "ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"
+    )
+
     qwen_tts_model: str = os.getenv(
         "QWEN_TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
     )
