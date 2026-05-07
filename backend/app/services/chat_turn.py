@@ -225,8 +225,11 @@ class ChatTurnService:
 
             async for chunk in reply_stream:
                 if self._controls.should_stop(session_id):
+                    # `stopped` is the terminal event for this path — do not
+                    # emit `done`, do not persist the partial assistant
+                    # message, and skip memory curation.
                     yield await emit("stopped", StoppedEventData(reason="manual_stop"))
-                    break
+                    return
 
                 if first_chunk_at is None:
                     first_chunk_at = time.perf_counter()

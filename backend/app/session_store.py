@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import asyncio
+import hmac
 import json
+import secrets
 import sqlite3
 import threading
+import uuid
 from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -322,6 +325,67 @@ class SessionControl:
     def is_muted(self, session_id: str) -> bool:
         with _locked(self._lock):
             return self._mute_flags.get(session_id, False)
+
+
+@dataclass(frozen=True)
+class SessionBinding:
+    """Server-side record of a minted session.
+
+    `token` is an opaque secret returned to the client at mint time; every
+    subsequent session-bound request must echo it. `user_id` is bound here
+    so chat/tts requests can't be retargeted at someone else's history.
+    """
+
+    session_id: str
+    token: str
+    user_id: int | None
+    character_id: str | None
+    created_at: str
+
+
+class SessionRegistry:
+    """In-memory binding of session_id → owner token + user_id.
+
+    Created at `POST /api/sessions`. Validated on every session-bound
+    request. Process-local — a restart drops bindings; clients re-mint.
+    """
+
+    def __init__(self) -> None:
+        self._bindings: dict[str, SessionBinding] = {}
+        self._lock = threading.Lock()
+
+    def mint(
+        self, *, user_id: int | None, character_id: str | None
+    ) -> SessionBinding:
+        binding = SessionBinding(
+            session_id=uuid.uuid4().hex,
+            token=secrets.token_urlsafe(32),
+            user_id=user_id,
+            character_id=character_id,
+            created_at=now_iso(),
+        )
+        with _locked(self._lock):
+            self._bindings[binding.session_id] = binding
+        return binding
+
+    def get(self, session_id: str) -> SessionBinding | None:
+        with _locked(self._lock):
+            return self._bindings.get(session_id)
+
+    def validate(self, session_id: str, token: str | None) -> SessionBinding | None:
+        """Constant-time check. Returns the binding on match, else None."""
+        if not token:
+            return None
+        binding = self.get(session_id)
+        if binding is None:
+            return None
+        if not hmac.compare_digest(binding.token, token):
+            return None
+        return binding
+
+    def discard(self, session_id: str) -> None:
+        with _locked(self._lock):
+            self._bindings.pop(session_id, None)
 
 
 @dataclass

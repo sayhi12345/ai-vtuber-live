@@ -36,8 +36,10 @@ from app.providers.base import ProviderError
 from app.safety import SafetyPipeline
 from app.services.chat_turn import ChatTurnService
 from app.session_store import (
+    SessionBinding,
     SessionControl,
     SessionEventBus,
+    SessionRegistry,
     SessionStore,
     StageEvent,
     now_iso,
@@ -63,6 +65,7 @@ store = SessionStore(settings.sqlite_path)
 safety = SafetyPipeline(settings.safety_blocklist)
 controls = SessionControl()
 events = SessionEventBus()
+session_registry = SessionRegistry()
 providers = build_default_registry()
 agent_router = SelectiveAgentRouter()
 agent_runtime = DeepAgentRuntime(providers)
@@ -130,16 +133,35 @@ def _http_error(
     )
 
 
-def _build_error_payload(
-    code: str,
-    message: str,
+def _require_session(
+    session_id: str,
+    session_token: str | None,
     *,
-    retryable: bool = False,
-    request_id: str | None = None,
-) -> ErrorPayload:
-    return ErrorPayload(
-        code=code, message=message, retryable=retryable, request_id=request_id
-    )
+    expected_user_id: int | None = None,
+) -> SessionBinding:
+    """Validate the session token and (optionally) the bound user_id.
+
+    Returns the binding so callers can read the bound user_id/character_id.
+    Raises HTTPException with a stable error code on any mismatch — we
+    deliberately use the same code for unknown/invalid so an attacker can't
+    distinguish "no such session" from "wrong token".
+    """
+    binding = session_registry.validate(session_id, session_token)
+    if binding is None:
+        raise _http_error(
+            403, "session_unauthorized", "Invalid session_id or session_token."
+        )
+    if (
+        expected_user_id is not None
+        and binding.user_id is not None
+        and binding.user_id != expected_user_id
+    ):
+        raise _http_error(
+            403,
+            "session_unauthorized",
+            "Session is bound to a different user.",
+        )
+    return binding
 
 
 
@@ -199,15 +221,12 @@ async def update_user(user_id: int, payload: UserUpdateRequest) -> dict[str, obj
 
 @app.post("/api/sessions", response_model=SessionInfo, status_code=201)
 async def create_session(payload: SessionCreateRequest) -> SessionInfo:
-    """Mint a server-side session_id.
+    """Mint a server-side session.
 
-    Frontends should call this once at the start of a conversation and pass
-    the returned `session_id` to chat/tts/stage/control endpoints. The id is
-    a UUID4 hex string with no business meaning — sessions are an
-    in-process bag of state (controls, event bus, message history).
-
-    The server does not yet enforce that downstream endpoints reference an
-    id minted here — that gate lands separately.
+    Returns `session_id` plus a one-time `session_token`. The token is the
+    only authority for subsequent /api/session/* /api/chat/stream /api/tts
+    /api/stage/stream calls — losing it requires re-minting. The id is
+    UUID4 hex; the token is `secrets.token_urlsafe(32)`.
     """
     if payload.user_id is not None and store.get_user(payload.user_id) is None:
         raise _http_error(404, "user_not_found", "Unknown user_id")
@@ -216,17 +235,21 @@ async def create_session(payload: SessionCreateRequest) -> SessionInfo:
         raise _http_error(
             422, "character_not_found", f"Unknown character_id: {character_id}"
         )
-    session_id = uuid.uuid4().hex
+    binding = session_registry.mint(
+        user_id=payload.user_id, character_id=character_id
+    )
     return SessionInfo(
-        session_id=session_id,
-        user_id=payload.user_id,
-        character_id=character_id,
-        created_at=now_iso(),
+        session_id=binding.session_id,
+        session_token=binding.token,
+        user_id=binding.user_id,
+        character_id=binding.character_id,
+        created_at=binding.created_at,
     )
 
 
 @app.post("/api/session/reset")
 async def reset_session(payload: SessionControlRequest) -> dict[str, str]:
+    _require_session(payload.session_id, payload.session_token)
     store.reset_session(payload.session_id)
     controls.clear_stop(payload.session_id)
     controls.set_mute(payload.session_id, False)
@@ -235,6 +258,7 @@ async def reset_session(payload: SessionControlRequest) -> dict[str, str]:
 
 @app.post("/api/session/stop")
 async def stop_session(payload: SessionControlRequest) -> dict[str, str]:
+    _require_session(payload.session_id, payload.session_token)
     controls.request_stop(payload.session_id)
     stopped_event = StoppedEventData(reason="manual_stop")
     await events.publish(
@@ -245,6 +269,7 @@ async def stop_session(payload: SessionControlRequest) -> dict[str, str]:
 
 @app.post("/api/session/mute")
 async def mute_session(payload: SessionMuteRequest) -> dict[str, str | bool]:
+    _require_session(payload.session_id, payload.session_token)
     controls.set_mute(payload.session_id, payload.muted)
     mute_event = MuteEventData(muted=payload.muted)
     await events.publish(
@@ -254,12 +279,17 @@ async def mute_session(payload: SessionMuteRequest) -> dict[str, str | bool]:
 
 
 @app.get("/api/session/{session_id}/metrics")
-async def session_metrics(session_id: str) -> dict[str, object]:
+async def session_metrics(
+    session_id: str,
+    token: str = Query(..., min_length=1, max_length=128),
+) -> dict[str, object]:
+    _require_session(session_id, token)
     return {"session_id": session_id, "metrics": store.recent_metrics(session_id)}
 
 
 @app.post("/api/tts")
 async def tts(payload: TTSRequest) -> Response:
+    _require_session(payload.session_id, payload.session_token)
     provider_name = _provider_name(payload.provider, settings.default_tts_provider)
     _validate_provider(provider_name, "tts")
     if controls.is_muted(payload.session_id):
@@ -294,7 +324,14 @@ async def tts(payload: TTSRequest) -> Response:
 
 
 @app.get("/api/stage/stream")
-async def stage_stream(session_id: str = Query(..., min_length=1, max_length=128)):
+async def stage_stream(
+    session_id: str = Query(..., min_length=1, max_length=128),
+    token: str = Query(..., min_length=1, max_length=128),
+):
+    # SSE via EventSource can't send custom headers, so the token rides
+    # on the query string. It's session-scoped (not a user credential),
+    # but URL logging still applies — re-mint to rotate.
+    _require_session(session_id, token)
     queue = await events.subscribe(session_id)
 
     async def generator():
@@ -327,6 +364,11 @@ async def chat_stream(payload: ChatStreamRequest):
     pipeline (safety → memory → routing → LLM → segmenting → metrics →
     persistence → memory curation) lives in `ChatTurnService`.
     """
+    _require_session(
+        payload.session_id,
+        payload.session_token,
+        expected_user_id=payload.user_id,
+    )
     llm_provider_name = _provider_name(payload.llm_provider, settings.default_llm_provider)
     tts_provider_name = _provider_name(payload.tts_provider, settings.default_tts_provider)
     _validate_provider(llm_provider_name, "llm")
