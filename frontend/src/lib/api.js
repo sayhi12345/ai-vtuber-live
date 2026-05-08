@@ -92,7 +92,6 @@ export async function synthesizeTts({
   sessionId,
   sessionToken,
   text,
-  provider,
   voice,
   emotion
 }) {
@@ -103,7 +102,6 @@ export async function synthesizeTts({
       session_id: sessionId,
       session_token: sessionToken,
       text,
-      provider,
       voice,
       emotion
     })

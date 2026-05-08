@@ -7,7 +7,6 @@ export default function ChatPanel({
   busy,
   muted,
   llmProvider,
-  ttsProvider,
   characters,
   characterId,
   users,
@@ -22,7 +21,6 @@ export default function ChatPanel({
   onReset,
   onToggleMute,
   onChangeLLM,
-  onChangeTTS,
   onChangeCharacter,
   onChangeUser,
   onCreateUser,
@@ -77,15 +75,6 @@ export default function ChatPanel({
             <option value="openai">OpenAI</option>
             <option value="gemini">Gemini</option>
             <option value="llamacpp">llama.cpp</option>
-          </select>
-        </label>
-        <label>
-          TTS
-          <select value={ttsProvider} onChange={(e) => onChangeTTS(e.target.value)}>
-            <option value="qwen">Qwen Local</option>
-            <option value="openai">OpenAI</option>
-            <option value="gemini">Gemini</option>
-            <option value="elevenlabs">ElevenLabs</option>
           </select>
         </label>
       </div>

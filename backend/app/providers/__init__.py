@@ -20,7 +20,6 @@ def build_default_registry() -> ProviderRegistry:
         gemini_provider,
         llamacpp_provider,
         openai_provider,
-        qwen_provider,
     )
 
     registry = ProviderRegistry()
@@ -28,7 +27,6 @@ def build_default_registry() -> ProviderRegistry:
     gemini_provider.register(registry)
     llamacpp_provider.register(registry)
     elevenlabs_provider.register(registry)
-    qwen_provider.register(registry)
     return registry
 
 

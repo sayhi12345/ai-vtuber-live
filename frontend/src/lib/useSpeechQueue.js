@@ -31,7 +31,6 @@ export function useSpeechQueue({
   sessionId,
   sessionToken,
   muted,
-  defaultProvider,
   onSubtitle,
   onExpression,
   onSpeaking,
@@ -41,16 +40,11 @@ export function useSpeechQueue({
   const runningRef = useRef(false);
   const stopRef = useRef(false);
   const mutedRef = useRef(muted);
-  const providerRef = useRef(defaultProvider);
   const tokenRef = useRef(sessionToken);
 
   useEffect(() => {
     mutedRef.current = muted;
   }, [muted]);
-
-  useEffect(() => {
-    providerRef.current = defaultProvider;
-  }, [defaultProvider]);
 
   useEffect(() => {
     tokenRef.current = sessionToken;
@@ -104,7 +98,6 @@ export function useSpeechQueue({
           sessionId,
           sessionToken: tokenRef.current,
           text,
-          provider: segment.tts_provider || providerRef.current,
           emotion
         });
         if (blob) {

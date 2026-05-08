@@ -290,7 +290,9 @@ async def session_metrics(
 @app.post("/api/tts")
 async def tts(payload: TTSRequest) -> Response:
     _require_session(payload.session_id, payload.session_token)
-    provider_name = _provider_name(payload.provider, settings.default_tts_provider)
+    # TTS provider is no longer caller-selectable. The server picks the
+    # configured default and validates it boots — clients pass text only.
+    provider_name = settings.default_tts_provider.lower()
     _validate_provider(provider_name, "tts")
     if controls.is_muted(payload.session_id):
         return Response(status_code=204)
@@ -370,7 +372,7 @@ async def chat_stream(payload: ChatStreamRequest):
         expected_user_id=payload.user_id,
     )
     llm_provider_name = _provider_name(payload.llm_provider, settings.default_llm_provider)
-    tts_provider_name = _provider_name(payload.tts_provider, settings.default_tts_provider)
+    tts_provider_name = settings.default_tts_provider.lower()
     _validate_provider(llm_provider_name, "llm")
     _validate_provider(tts_provider_name, "tts")
     character_id = payload.character_id or settings.default_character_id
