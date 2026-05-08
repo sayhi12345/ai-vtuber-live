@@ -5,7 +5,7 @@ from collections.abc import AsyncIterator
 from langchain_openai import ChatOpenAI
 
 from app.config import settings
-from app.providers.base import LLMProvider, ProviderError
+from app.providers.base import LLMProvider, ProviderDescriptor, ProviderError
 from app.providers.langchain_utils import build_langchain_messages, extract_text_content
 
 
@@ -46,3 +46,14 @@ class LlamaCppProvider(LLMProvider):
                     yield text
         except Exception as exc:
             raise ProviderError(f"llama.cpp chat failed: {exc}") from exc
+
+
+def register(registry) -> None:
+    registry.register(
+        ProviderDescriptor(
+            name="llamacpp",
+            factory=LlamaCppProvider,
+            is_configured=lambda: bool(settings.llamacpp_base_url),
+            supports_llm=True,
+        )
+    )

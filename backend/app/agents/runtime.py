@@ -6,16 +6,12 @@ import sys
 from typing import Any
 
 from langchain_core.tools import tool
-from langchain_google_genai import ChatGoogleGenerativeAI
-from langchain_openai import ChatOpenAI
 
 from app.agents.routing import AgentRouteDecision
 from app.bazi import calculate_bazi_chart
-from app.config import settings
 from app.providers.base import ProviderError
-from app.providers.gemini_provider import _gemini_api_endpoint
 from app.providers.langchain_utils import extract_text_content
-from app.providers.openai_provider import _normalize_openai_urls
+from app.providers.registry import ProviderRegistry
 from app.tarot import draw_tarot_cards
 
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
@@ -41,6 +37,9 @@ async def calculate_bazi_chart_tool(
 
 
 class DeepAgentRuntime:
+    def __init__(self, registry: ProviderRegistry) -> None:
+        self._registry = registry
+
     async def stream_reply(
         self,
         *,
@@ -88,37 +87,12 @@ class DeepAgentRuntime:
     ) -> Any:
         create_deep_agent, backend_classes = _load_deepagents()
         return create_deep_agent(
-            model=_build_agent_model(provider_name, temperature),
+            model=self._registry.langchain_model(provider_name.lower(), temperature),
             system_prompt=_compose_agent_system_prompt(system_prompt, route),
             backend=_build_backend_factory(backend_classes),
             skills=route.skill_sources,
             tools=[draw_tarot_cards_tool, calculate_bazi_chart_tool],
         )
-
-
-def _build_agent_model(provider_name: str, temperature: float) -> Any:
-    normalized = provider_name.lower()
-    if normalized == "openai":
-        _, api_base_url = _normalize_openai_urls(settings.openai_base_url.rstrip("/"))
-        return ChatOpenAI(
-            model=settings.openai_chat_model,
-            api_key=settings.openai_api_key,
-            base_url=api_base_url,
-            temperature=temperature,
-            streaming=True,
-        )
-    if normalized == "gemini":
-        model_kwargs: dict[str, object] = {
-            "model": settings.gemini_chat_model,
-            "google_api_key": settings.gemini_api_key,
-            "temperature": temperature,
-        }
-        if settings.gemini_base_url.rstrip("/") != "https://generativelanguage.googleapis.com":
-            model_kwargs["client_options"] = {
-                "api_endpoint": _gemini_api_endpoint(settings.gemini_base_url.rstrip("/"))
-            }
-        return ChatGoogleGenerativeAI(**model_kwargs)
-    raise ProviderError(f"Unsupported LLM provider for deep agent routing: {provider_name}")
 
 
 def _load_deepagents() -> tuple[Any, dict[str, Any]]:

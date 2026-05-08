@@ -8,7 +8,12 @@ import httpx
 from langchain_google_genai import ChatGoogleGenerativeAI
 
 from app.config import settings
-from app.providers.base import LLMProvider, ProviderError, TTSProvider
+from app.providers.base import (
+    LLMProvider,
+    ProviderDescriptor,
+    ProviderError,
+    TTSProvider,
+)
 from app.providers.langchain_utils import build_langchain_messages, extract_text_content
 
 
@@ -96,3 +101,28 @@ class GeminiProvider(LLMProvider, TTSProvider):
             raise ProviderError("Unable to parse Gemini TTS audio payload.") from exc
 
         raise ProviderError("Gemini TTS returned no audio data.")
+
+
+def _build_langchain_model(temperature: float) -> ChatGoogleGenerativeAI:
+    base_url = settings.gemini_base_url.rstrip("/")
+    model_kwargs: dict[str, object] = {
+        "model": settings.gemini_chat_model,
+        "google_api_key": settings.gemini_api_key,
+        "temperature": temperature,
+    }
+    if base_url != "https://generativelanguage.googleapis.com":
+        model_kwargs["client_options"] = {"api_endpoint": _gemini_api_endpoint(base_url)}
+    return ChatGoogleGenerativeAI(**model_kwargs)
+
+
+def register(registry) -> None:
+    registry.register(
+        ProviderDescriptor(
+            name="gemini",
+            factory=GeminiProvider,
+            is_configured=lambda: bool(settings.gemini_api_key),
+            supports_llm=True,
+            supports_tts=True,
+            langchain_factory=_build_langchain_model,
+        )
+    )

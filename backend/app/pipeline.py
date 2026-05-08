@@ -5,12 +5,18 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from pydantic import BaseModel
+
 
 SENTENCE_SPLIT_PATTERN = re.compile(r"(.+?[。！？!?\.]+)")
 
 
-def sse_pack(event: str, data: dict[str, Any]) -> bytes:
-    return f"event: {event}\ndata: {json.dumps(data, ensure_ascii=False)}\n\n".encode("utf-8")
+def sse_pack(event: str, data: BaseModel | dict[str, Any]) -> bytes:
+    if isinstance(data, BaseModel):
+        payload = data.model_dump(exclude_none=True)
+    else:
+        payload = data
+    return f"event: {event}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n".encode("utf-8")
 
 
 @dataclass

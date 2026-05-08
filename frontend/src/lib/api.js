@@ -39,6 +39,13 @@ function parseEventBlock(block) {
   return { event, data: JSON.parse(joined) };
 }
 
+export const createSession = ({ user_id, character_id }) =>
+  apiFetch("/api/sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ user_id, character_id })
+  });
+
 export async function streamChat(payload, onEvent, signal) {
   const response = await fetch(buildApiUrl("/api/chat/stream"), {
     method: "POST",
@@ -83,6 +90,7 @@ export async function streamChat(payload, onEvent, signal) {
 
 export async function synthesizeTts({
   sessionId,
+  sessionToken,
   text,
   provider,
   voice,
@@ -93,6 +101,7 @@ export async function synthesizeTts({
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       session_id: sessionId,
+      session_token: sessionToken,
       text,
       provider,
       voice,
@@ -110,8 +119,12 @@ export async function synthesizeTts({
   return response.blob();
 }
 
-export function subscribeStage(sessionId, onEvent) {
-  const url = buildApiUrl(`/api/stage/stream?session_id=${encodeURIComponent(sessionId)}`);
+export function subscribeStage(sessionId, sessionToken, onEvent) {
+  const params = new URLSearchParams({
+    session_id: sessionId,
+    token: sessionToken
+  });
+  const url = buildApiUrl(`/api/stage/stream?${params.toString()}`);
   const source = new EventSource(url);
 
   const events = ["ready", "start", "segment", "done", "error", "stopped", "mute"];
@@ -132,27 +145,31 @@ export function subscribeStage(sessionId, onEvent) {
   return () => source.close();
 }
 
-export async function stopSession(sessionId) {
+export async function stopSession(sessionId, sessionToken) {
   await fetch(buildApiUrl("/api/session/stop"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: sessionId })
+    body: JSON.stringify({ session_id: sessionId, session_token: sessionToken })
   });
 }
 
-export async function setSessionMute(sessionId, muted) {
+export async function setSessionMute(sessionId, sessionToken, muted) {
   await fetch(buildApiUrl("/api/session/mute"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: sessionId, muted })
+    body: JSON.stringify({
+      session_id: sessionId,
+      session_token: sessionToken,
+      muted
+    })
   });
 }
 
-export async function resetSession(sessionId) {
+export async function resetSession(sessionId, sessionToken) {
   await fetch(buildApiUrl("/api/session/reset"), {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ session_id: sessionId })
+    body: JSON.stringify({ session_id: sessionId, session_token: sessionToken })
   });
 }
 
@@ -174,5 +191,7 @@ export const updateUser = (userId, { name, bio }) =>
     body: JSON.stringify({ name, bio })
   });
 
-export const getSessionMetrics = (sessionId) =>
-  apiFetch(`/api/session/${encodeURIComponent(sessionId)}/metrics`);
+export const getSessionMetrics = (sessionId, sessionToken) =>
+  apiFetch(
+    `/api/session/${encodeURIComponent(sessionId)}/metrics?token=${encodeURIComponent(sessionToken)}`
+  );

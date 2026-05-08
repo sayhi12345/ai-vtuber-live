@@ -5,7 +5,7 @@ import logging
 import httpx
 
 from app.config import settings
-from app.providers.base import ProviderError, TTSProvider
+from app.providers.base import ProviderDescriptor, ProviderError, TTSProvider
 
 logger = logging.getLogger(__name__)
 
@@ -135,3 +135,14 @@ class ElevenLabsProvider(TTSProvider):
                 chunks.append(chunk)
 
         return b"".join(chunks), "audio/ogg"
+
+
+def register(registry) -> None:
+    registry.register(
+        ProviderDescriptor(
+            name="elevenlabs",
+            factory=ElevenLabsProvider,
+            is_configured=lambda: bool(settings.elevenlabs_api_key),
+            supports_tts=True,
+        )
+    )
