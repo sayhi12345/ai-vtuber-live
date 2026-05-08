@@ -69,7 +69,6 @@ def test_chat_rejects_unknown_user_id(monkeypatch, tmp_path: Path):
             "user_id": 999,
             "message": "hello",
             "llm_provider": "openai",
-            "tts_provider": "openai",
             "character_id": "luna",
         },
     )

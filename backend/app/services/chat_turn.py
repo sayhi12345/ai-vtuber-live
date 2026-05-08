@@ -107,9 +107,8 @@ class ChatTurnService:
         llm_provider_name = _provider_name(
             payload.llm_provider, self._settings.default_llm_provider
         )
-        tts_provider_name = _provider_name(
-            payload.tts_provider, self._settings.default_tts_provider
-        )
+        # TTS provider is server-controlled — clients no longer select it.
+        tts_provider_name = self._settings.default_tts_provider.lower()
         character_id = payload.character_id or self._settings.default_character_id
         character = self._characters.get(character_id)
         persona = character.to_system_prompt()

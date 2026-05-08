@@ -140,7 +140,7 @@ class FakeCharacters:
 @dataclass
 class FakeSettings:
     default_llm_provider: str = "openai"
-    default_tts_provider: str = "qwen"
+    default_tts_provider: str = "openai"
     default_character_id: str = "luna"
     history_limit: int = 12
     memory_search_limit: int = 5

@@ -16,7 +16,6 @@ import {
 import { useSpeechQueue } from "./lib/useSpeechQueue";
 
 const DEFAULT_LLM_PROVIDER = import.meta.env.VITE_DEFAULT_LLM_PROVIDER || "openai";
-const DEFAULT_TTS_PROVIDER = import.meta.env.VITE_DEFAULT_TTS_PROVIDER || "qwen";
 
 const SESSION_STORAGE_KEY = "ai_vtuber_session_v2";
 
@@ -62,7 +61,6 @@ function ChatPage() {
   const [error, setError] = useState("");
   const [muted, setMuted] = useState(false);
   const [llmProvider, setLLMProvider] = useState(DEFAULT_LLM_PROVIDER);
-  const [ttsProvider, setTTSProvider] = useState(DEFAULT_TTS_PROVIDER);
   const [characters, setCharacters] = useState([]);
   const [characterId, setCharacterId] = useState(null);
   const [users, setUsers] = useState([]);
@@ -179,7 +177,6 @@ function ChatPage() {
     sessionId,
     sessionToken,
     muted,
-    defaultProvider: ttsProvider,
     onSubtitle: setSubtitle,
     onExpression: setExpression,
     onSpeaking: setSpeaking,
@@ -191,9 +188,8 @@ function ChatPage() {
     const url = new URL(`${window.location.origin}/stage`);
     url.searchParams.set("session_id", sessionId);
     url.searchParams.set("session_token", sessionToken);
-    url.searchParams.set("tts_provider", ttsProvider);
     return url.toString();
-  }, [sessionId, sessionToken, ttsProvider]);
+  }, [sessionId, sessionToken]);
 
   const handleStop = async () => {
     abortRef.current?.abort();
@@ -303,7 +299,6 @@ function ChatPage() {
           user_id: selectedUserId,
           message: text,
           llm_provider: llmProvider,
-          tts_provider: ttsProvider,
           character_id: characterId
         },
         (eventName, data) => {
@@ -367,7 +362,6 @@ function ChatPage() {
         busy={busy}
         muted={muted}
         llmProvider={llmProvider}
-        ttsProvider={ttsProvider}
         characters={characters}
         characterId={characterId}
         users={users}
@@ -382,7 +376,6 @@ function ChatPage() {
         onReset={handleReset}
         onToggleMute={handleToggleMute}
         onChangeLLM={setLLMProvider}
-        onChangeTTS={setTTSProvider}
         onChangeCharacter={handleChangeCharacter}
         onChangeUser={handleChangeUser}
         onCreateUser={handleCreateUser}
@@ -397,7 +390,6 @@ function StagePage() {
   const stored = loadStoredSession();
   const sessionId = search.get("session_id") || stored?.session_id || "";
   const sessionToken = search.get("session_token") || stored?.session_token || "";
-  const stageTtsProvider = search.get("tts_provider") || DEFAULT_TTS_PROVIDER;
   const [muted, setMuted] = useState(search.get("audio") === "1" ? false : true);
   const [subtitle, setSubtitle] = useState(
     sessionId && sessionToken ? "等待對話事件..." : "需要有效的 session — 請從主頁開啟。"
@@ -412,7 +404,6 @@ function StagePage() {
     sessionId,
     sessionToken,
     muted,
-    defaultProvider: stageTtsProvider,
     onSubtitle: null,
     onExpression: setExpression,
     onSpeaking: setSpeaking,
@@ -434,8 +425,7 @@ function StagePage() {
       if (eventName === "segment") {
         enqueue({
           text: data?.text || "",
-          emotion: data?.emotion || "neutral",
-          tts_provider: data?.tts_provider || stageTtsProvider
+          emotion: data?.emotion || "neutral"
         });
       }
       if (eventName === "error") {
@@ -459,7 +449,7 @@ function StagePage() {
       unsubscribe();
       stop();
     };
-  }, [enqueue, sessionId, sessionToken, stageTtsProvider, stop]);
+  }, [enqueue, sessionId, sessionToken, stop]);
 
   return (
     <main className="stage-only">
@@ -475,7 +465,6 @@ function StagePage() {
       />
       <div className="stage-debug">
         <span>session: {sessionId}</span>
-        <span>provider: {stageTtsProvider}</span>
         <span>{muted ? "audio: off" : "audio: on"}</span>
         {error ? <span className="error">{error}</span> : null}
       </div>

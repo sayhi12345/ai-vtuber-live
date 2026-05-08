@@ -35,7 +35,7 @@ class Settings:
     )
 
     default_llm_provider: str = os.getenv("DEFAULT_LLM_PROVIDER", "openai")
-    default_tts_provider: str = os.getenv("DEFAULT_TTS_PROVIDER", "qwen")
+    default_tts_provider: str = os.getenv("DEFAULT_TTS_PROVIDER", "openai")
 
     openai_api_key: str | None = os.getenv("OPENAI_API_KEY")
     openai_base_url: str = os.getenv("OPENAI_BASE_URL", "https://api.openai.com")
@@ -56,10 +56,6 @@ class Settings:
         "GEMINI_BASE_URL", "https://generativelanguage.googleapis.com"
     )
     gemini_chat_model: str = os.getenv("GEMINI_CHAT_MODEL", "gemini-3.1-flash-lite-preview")
-    gemini_tts_model: str = os.getenv(
-        "GEMINI_TTS_MODEL", "gemini-2.5-flash-preview-tts"
-    )
-    gemini_tts_voice: str = os.getenv("GEMINI_TTS_VOICE", "Leda")
 
     elevenlabs_api_key: str | None = os.getenv("ELEVENLABS_API_KEY")
     elevenlabs_base_url: str = os.getenv(
@@ -71,26 +67,6 @@ class Settings:
     elevenlabs_voice_id: str = os.getenv(
         "ELEVENLABS_VOICE_ID", "21m00Tcm4TlvDq8ikWAM"
     )
-
-    qwen_tts_model: str = os.getenv(
-        "QWEN_TTS_MODEL", "Qwen/Qwen3-TTS-12Hz-0.6B-CustomVoice"
-    )
-    qwen_tts_device: str = os.getenv("QWEN_TTS_DEVICE", "auto")
-    qwen_tts_dtype: str = os.getenv("QWEN_TTS_DTYPE", "auto")
-    qwen_tts_attn_implementation: str = os.getenv(
-        "QWEN_TTS_ATTN_IMPLEMENTATION", "sdpa"
-    )
-    qwen_tts_language: str = os.getenv("QWEN_TTS_LANGUAGE", "Chinese")
-    qwen_tts_speaker: str = os.getenv("QWEN_TTS_SPEAKER", "Vivian")
-    qwen_tts_instructions: str = os.getenv(
-        "QWEN_TTS_INSTRUCTIONS",
-        "用自然、活潑的語氣說話，像一位個性鮮明的 AI VTuber，語速適中，情感真實。",
-    )
-    # Set to true to enable torch.compile (reduce-overhead mode).
-    # First inference will be slow (~30-120s warm-up), subsequent calls are faster.
-    qwen_tts_compile: bool = _bool_env("QWEN_TTS_COMPILE", True)
-    # Max concurrent inference threads. Raise only if VRAM > 8 GB.
-    qwen_tts_max_workers: int = int(os.getenv("QWEN_TTS_MAX_WORKERS", "4"))
 
     sqlite_path: str = os.getenv(
         "SQLITE_PATH",

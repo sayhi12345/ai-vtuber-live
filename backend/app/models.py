@@ -41,7 +41,6 @@ class ChatStreamRequest(BaseModel):
     user_id: int = Field(ge=1)
     message: str = Field(min_length=1, max_length=4000)
     llm_provider: LLMProviderName | None = None
-    tts_provider: TTSProviderName | None = None
     character_id: str | None = Field(default=None, max_length=64)
     temperature: float = Field(default=0.7, ge=0.0, le=1.5)
 
@@ -60,7 +59,6 @@ class TTSRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
     session_token: str = Field(min_length=1, max_length=128)
     text: str = Field(min_length=1, max_length=1200)
-    provider: TTSProviderName | None = None
     voice: str | None = Field(default=None, max_length=64)
     emotion: str | None = Field(default="neutral", max_length=32)
 
