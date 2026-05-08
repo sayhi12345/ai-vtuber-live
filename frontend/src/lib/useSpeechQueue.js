@@ -29,6 +29,7 @@ async function playMutedSpeechPattern(text, onSpeaking, onMouth, shouldStop) {
 
 export function useSpeechQueue({
   sessionId,
+  sessionToken,
   muted,
   defaultProvider,
   onSubtitle,
@@ -41,6 +42,7 @@ export function useSpeechQueue({
   const stopRef = useRef(false);
   const mutedRef = useRef(muted);
   const providerRef = useRef(defaultProvider);
+  const tokenRef = useRef(sessionToken);
 
   useEffect(() => {
     mutedRef.current = muted;
@@ -49,6 +51,10 @@ export function useSpeechQueue({
   useEffect(() => {
     providerRef.current = defaultProvider;
   }, [defaultProvider]);
+
+  useEffect(() => {
+    tokenRef.current = sessionToken;
+  }, [sessionToken]);
 
   const playerRef = useRef(null);
   if (!playerRef.current) {
@@ -88,9 +94,15 @@ export function useSpeechQueue({
         continue;
       }
 
+      if (!tokenRef.current) {
+        // No active session yet — skip silently rather than calling
+        // /api/tts without auth.
+        continue;
+      }
       try {
         const blob = await synthesizeTts({
           sessionId,
+          sessionToken: tokenRef.current,
           text,
           provider: segment.tts_provider || providerRef.current,
           emotion

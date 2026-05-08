@@ -52,15 +52,20 @@ def test_curator_parser_filters_sensitive_memories():
 
 def test_chat_rejects_unknown_user_id(monkeypatch, tmp_path: Path):
     from app import main
+    from app.session_store import SessionRegistry
 
     test_store = SessionStore(str(tmp_path / "test.db"))
     monkeypatch.setattr(main, "store", test_store)
+    monkeypatch.setattr(main, "session_registry", SessionRegistry())
     client = TestClient(main.app)
+
+    minted = client.post("/api/sessions", json={}).json()
 
     response = client.post(
         "/api/chat/stream",
         json={
-            "session_id": "session-test",
+            "session_id": minted["session_id"],
+            "session_token": minted["session_token"],
             "user_id": 999,
             "message": "hello",
             "llm_provider": "openai",
@@ -69,5 +74,5 @@ def test_chat_rejects_unknown_user_id(monkeypatch, tmp_path: Path):
         },
     )
 
-    assert response.status_code == 400
-    assert response.json()["detail"] == "Unknown user_id"
+    assert response.status_code == 404
+    assert response.json()["error"]["code"] == "user_not_found"

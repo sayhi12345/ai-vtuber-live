@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import ChatPanel from "./components/ChatPanel";
 import Live2DStage from "./components/Live2DStage";
 import {
+  createSession,
   createUser,
   getCharacters,
   getUsers,
@@ -17,11 +18,28 @@ import { useSpeechQueue } from "./lib/useSpeechQueue";
 const DEFAULT_LLM_PROVIDER = import.meta.env.VITE_DEFAULT_LLM_PROVIDER || "openai";
 const DEFAULT_TTS_PROVIDER = import.meta.env.VITE_DEFAULT_TTS_PROVIDER || "qwen";
 
-function makeSessionId() {
-  if (window.crypto?.randomUUID) {
-    return `session-${window.crypto.randomUUID().slice(0, 8)}`;
+const SESSION_STORAGE_KEY = "ai_vtuber_session_v2";
+
+function loadStoredSession() {
+  try {
+    const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw);
+    if (!parsed?.session_id || !parsed?.session_token) return null;
+    return parsed;
+  } catch {
+    return null;
   }
-  return `session-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function persistSession(session) {
+  if (session) {
+    window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+  } else {
+    window.localStorage.removeItem(SESSION_STORAGE_KEY);
+  }
+  // Drop the legacy key from the pre-token contract.
+  window.localStorage.removeItem("ai_vtuber_session_id");
 }
 
 function createMessage(role, content) {
@@ -103,10 +121,9 @@ function ChatPage() {
     };
   }, []);
 
-  const [sessionId] = useState(() => {
-    const existing = window.localStorage.getItem("ai_vtuber_session_id");
-    return existing || makeSessionId();
-  });
+  const [session, setSession] = useState(() => loadStoredSession());
+  const sessionId = session?.session_id || null;
+  const sessionToken = session?.session_token || null;
   const abortRef = useRef(null);
   const draftRef = useRef("");
   const finalTextRef = useRef("");
@@ -116,8 +133,39 @@ function ChatPage() {
   }, [assistantDraft]);
 
   useEffect(() => {
-    window.localStorage.setItem("ai_vtuber_session_id", sessionId);
-  }, [sessionId]);
+    persistSession(session);
+  }, [session]);
+
+  // Mint or re-mint a session whenever the bound user/character changes.
+  // The server binds session.user_id at mint time, so we re-mint instead
+  // of trying to mutate an existing binding.
+  useEffect(() => {
+    if (!selectedUserId || !characterId) return;
+    if (
+      session &&
+      session.user_id === selectedUserId &&
+      session.character_id === characterId
+    ) {
+      return;
+    }
+    let cancelled = false;
+    createSession({ user_id: selectedUserId, character_id: characterId })
+      .then((info) => {
+        if (cancelled) return;
+        setSession({
+          session_id: info.session_id,
+          session_token: info.session_token,
+          user_id: info.user_id,
+          character_id: info.character_id
+        });
+      })
+      .catch((err) => {
+        if (!cancelled) setError(`Session mint failed: ${err.message}`);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedUserId, characterId, session]);
 
   useEffect(() => {
     if (selectedUserId) {
@@ -129,6 +177,7 @@ function ChatPage() {
 
   const { enqueue, stop, resetStop } = useSpeechQueue({
     sessionId,
+    sessionToken,
     muted,
     defaultProvider: ttsProvider,
     onSubtitle: setSubtitle,
@@ -138,18 +187,21 @@ function ChatPage() {
   });
 
   const stageUrl = useMemo(() => {
+    if (!sessionId || !sessionToken) return "";
     const url = new URL(`${window.location.origin}/stage`);
     url.searchParams.set("session_id", sessionId);
+    url.searchParams.set("session_token", sessionToken);
     url.searchParams.set("tts_provider", ttsProvider);
     return url.toString();
-  }, [sessionId, ttsProvider]);
+  }, [sessionId, sessionToken, ttsProvider]);
 
   const handleStop = async () => {
     abortRef.current?.abort();
     stop();
     setBusy(false);
+    if (!sessionId || !sessionToken) return;
     try {
-      await stopSession(sessionId);
+      await stopSession(sessionId, sessionToken);
     } catch {
       // no-op
     }
@@ -157,7 +209,13 @@ function ChatPage() {
 
   const handleReset = async () => {
     await handleStop();
-    await resetSession(sessionId);
+    if (sessionId && sessionToken) {
+      try {
+        await resetSession(sessionId, sessionToken);
+      } catch {
+        // no-op
+      }
+    }
     if (scopeKey) setMessagesByScope((prev) => ({ ...prev, [scopeKey]: [] }));
     setAssistantDraft("");
     setSubtitle("");
@@ -168,7 +226,13 @@ function ChatPage() {
   const handleToggleMute = async () => {
     const next = !muted;
     setMuted(next);
-    await setSessionMute(sessionId, next);
+    if (sessionId && sessionToken) {
+      try {
+        await setSessionMute(sessionId, sessionToken, next);
+      } catch {
+        // no-op
+      }
+    }
   };
 
   const handleChangeCharacter = (newCharacterId) => {
@@ -205,6 +269,10 @@ function ChatPage() {
     if (!text || busy || !selectedUserId) {
       return;
     }
+    if (!sessionId || !sessionToken) {
+      setError("Session is not ready yet — please wait a moment and retry.");
+      return;
+    }
 
     setBusy(true);
     setError("");
@@ -231,6 +299,7 @@ function ChatPage() {
       await streamChat(
         {
           session_id: sessionId,
+          session_token: sessionToken,
           user_id: selectedUserId,
           message: text,
           llm_provider: llmProvider,
@@ -325,30 +394,43 @@ function ChatPage() {
 
 function StagePage() {
   const search = new URLSearchParams(window.location.search);
-  const sessionId =
-    search.get("session_id") ||
-    window.localStorage.getItem("ai_vtuber_session_id") ||
-    makeSessionId();
+  const stored = loadStoredSession();
+  const sessionId = search.get("session_id") || stored?.session_id || "";
+  const sessionToken = search.get("session_token") || stored?.session_token || "";
   const stageTtsProvider = search.get("tts_provider") || DEFAULT_TTS_PROVIDER;
   const [muted, setMuted] = useState(search.get("audio") === "1" ? false : true);
-  const [subtitle, setSubtitle] = useState("等待對話事件...");
+  const [subtitle, setSubtitle] = useState(
+    sessionId && sessionToken ? "等待對話事件..." : "需要有效的 session — 請從主頁開啟。"
+  );
   const [expression, setExpression] = useState("neutral");
   const [mouthOpen, setMouthOpen] = useState(0);
   const [speaking, setSpeaking] = useState(false);
   const [error, setError] = useState("");
+  const subtitleRef = useRef("");
 
   const { enqueue, stop } = useSpeechQueue({
     sessionId,
+    sessionToken,
     muted,
     defaultProvider: stageTtsProvider,
-    onSubtitle: setSubtitle,
+    onSubtitle: null,
     onExpression: setExpression,
     onSpeaking: setSpeaking,
     onMouth: setMouthOpen
   });
 
   useEffect(() => {
-    const unsubscribe = subscribeStage(sessionId, (eventName, data) => {
+    if (!sessionId || !sessionToken) return undefined;
+    const unsubscribe = subscribeStage(sessionId, sessionToken, (eventName, data) => {
+      if (eventName === "start") {
+        subtitleRef.current = "";
+        setSubtitle("");
+        setError("");
+      }
+      if (eventName === "delta") {
+        subtitleRef.current += data?.text || "";
+        setSubtitle(subtitleRef.current);
+      }
       if (eventName === "segment") {
         enqueue({
           text: data?.text || "",
@@ -358,6 +440,11 @@ function StagePage() {
       }
       if (eventName === "error") {
         setError(data?.message || "Stage stream error.");
+      }
+      if (eventName === "done") {
+        const finalText = data?.text || subtitleRef.current;
+        subtitleRef.current = finalText;
+        setSubtitle(finalText || "等待對話事件...");
       }
       if (eventName === "stopped") {
         stop();
@@ -372,7 +459,7 @@ function StagePage() {
       unsubscribe();
       stop();
     };
-  }, [enqueue, sessionId, stageTtsProvider, stop]);
+  }, [enqueue, sessionId, sessionToken, stageTtsProvider, stop]);
 
   return (
     <main className="stage-only">

@@ -13,8 +13,11 @@ def now_iso() -> str:
 API_VERSION = "1"
 
 Role = Literal["system", "user", "assistant"]
-LLMProviderName = Literal["openai", "gemini", "llamacpp"]
-TTSProviderName = Literal["openai", "gemini", "qwen", "elevenlabs"]
+# Provider names are validated at the route boundary against the runtime
+# ProviderRegistry (so adding a provider is a single edit). The schema stays
+# `str` to keep the API contract decoupled from compiled-in provider lists.
+LLMProviderName = str
+TTSProviderName = str
 
 SSEEventName = Literal[
     "ready", "start", "delta", "segment", "metric",
@@ -34,6 +37,7 @@ class ChatMessage(BaseModel):
 
 class ChatStreamRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
+    session_token: str = Field(min_length=1, max_length=128)
     user_id: int = Field(ge=1)
     message: str = Field(min_length=1, max_length=4000)
     llm_provider: LLMProviderName | None = None
@@ -54,6 +58,7 @@ class UserUpdateRequest(BaseModel):
 
 class TTSRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
+    session_token: str = Field(min_length=1, max_length=128)
     text: str = Field(min_length=1, max_length=1200)
     provider: TTSProviderName | None = None
     voice: str | None = Field(default=None, max_length=64)
@@ -62,10 +67,30 @@ class TTSRequest(BaseModel):
 
 class SessionControlRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=128)
+    session_token: str = Field(min_length=1, max_length=128)
 
 
 class SessionMuteRequest(SessionControlRequest):
     muted: bool
+
+
+class SessionCreateRequest(BaseModel):
+    user_id: int | None = Field(default=None, ge=1)
+    character_id: str | None = Field(default=None, max_length=64)
+
+
+class SessionInfo(BaseModel):
+    session_id: str
+    session_token: str = Field(
+        description=(
+            "Opaque secret returned only at mint time. The client must echo "
+            "it on every session-bound request; the server does not return "
+            "it again."
+        ),
+    )
+    user_id: int | None = None
+    character_id: str | None = None
+    created_at: str
 
 
 # --- Unified error envelope ---------------------------------------------------
