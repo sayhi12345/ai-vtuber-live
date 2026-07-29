@@ -16,6 +16,7 @@ from typing import Any
 import pytest
 
 from app.agents.routing import AgentRouteDecision, SelectiveAgentRouter
+from app.characters import load_default_registry
 from app.memory import MemoryRecord
 from app.models import ChatStreamRequest, ErrorPayload
 from app.providers.base import LLMProvider, ProviderError
@@ -93,8 +94,12 @@ class FakeBus:
 class FakeLLM(LLMProvider):
     def __init__(self, chunks: list[str]) -> None:
         self._chunks = chunks
+        self.messages: list[list[dict[str, str]]] = []
+        self.system_prompts: list[str] = []
 
     async def stream_reply(self, messages, system_prompt, temperature):
+        self.messages.append(list(messages))
+        self.system_prompts.append(system_prompt)
         for chunk in self._chunks:
             await asyncio.sleep(0)
             yield chunk
@@ -132,7 +137,10 @@ class FakeMemoryService:
 class FakeCharacters:
     def get(self, character_id: str):
         return SimpleNamespace(
-            profile=SimpleNamespace(name="Tester"),
+            profile=SimpleNamespace(
+                name="Tester",
+                short_description="test character",
+            ),
             to_system_prompt=lambda: "you are tester",
         )
 
@@ -147,9 +155,9 @@ class FakeSettings:
     memory_curator_provider: str | None = None
 
 
-def _build_service(*, llm: LLMProvider, controls=None, safety=None) -> tuple[
-    ChatTurnService, FakeStore, FakeBus, FakeControls
-]:
+def _build_service(
+    *, llm: LLMProvider, controls=None, safety=None, characters=None
+) -> tuple[ChatTurnService, FakeStore, FakeBus, FakeControls]:
     store = FakeStore()
     bus = FakeBus()
     fake_controls = controls or FakeControls()
@@ -163,7 +171,7 @@ def _build_service(*, llm: LLMProvider, controls=None, safety=None) -> tuple[
         agent_runtime=SimpleNamespace(),  # unused on the standard-LLM path
         memory_service=FakeMemoryService(),
         memory_curator=SimpleNamespace(),
-        characters=FakeCharacters(),
+        characters=characters or FakeCharacters(),
         settings=FakeSettings(),
     )
     return service, store, bus, fake_controls
@@ -213,6 +221,164 @@ def test_happy_path_emits_start_delta_segment_done():
     bus_names = [name for _, name in bus.published]
     assert "metric" not in bus_names
     assert {"start", "delta", "segment", "done"}.issubset(set(bus_names))
+
+
+def test_chat_mode_is_default_and_does_not_add_game_instructions():
+    llm = FakeLLM(["hello! "])
+    service, _, _, _ = _build_service(llm=llm)
+
+    asyncio.run(_collect(service, _payload()))
+
+    assert _payload().mode == "chat"
+    assert "共鳴挑戰" not in llm.system_prompts[0]
+
+
+def test_harmony_challenge_preserves_each_persona_and_adds_scoring_contract():
+    prompts = {}
+    for character_id, persona_marker in (
+        ("luna", "溫柔但偶爾毒舌"),
+        ("aria", "活潑外向"),
+    ):
+        llm = FakeLLM(["challenge response! "])
+        service, _, _, _ = _build_service(
+            llm=llm,
+            characters=load_default_registry(),
+        )
+
+        asyncio.run(
+            _collect(
+                service,
+                ChatStreamRequest(
+                    session_id=f"sess-{character_id}",
+                    session_token="token-test",
+                    user_id=1,
+                    message="我的回應",
+                    character_id=character_id,
+                    mode="harmony_challenge",
+                ),
+            )
+        )
+        prompts[character_id] = llm.system_prompts[0]
+
+        assert persona_marker in prompts[character_id]
+        assert "共鳴挑戰" in prompts[character_id]
+        assert "0-100" in prompts[character_id]
+        assert "80" in prompts[character_id]
+        assert "79" in prompts[character_id]
+        assert "判定" in prompts[character_id]
+        assert "角色反應" in prompts[character_id]
+        assert "改進提示" in prompts[character_id]
+        assert "輸出必須恰好四行，不得增加任何其他文字" in prompts[character_id]
+        assert (
+            "分數：<0-100 integer>\n"
+            "判定：<成功|尚未成功>\n"
+            "角色反應：<one short current emotion/reaction sentence>\n"
+            "改進提示：<the only actionable suggestion>"
+        ) in prompts[character_id]
+        assert "不得告訴、要求、詢問或邀請使用者做任何事" in prompts[character_id]
+        assert (
+            "應該、可以、不妨、記得、下次、先、請、一起、建議、試試、考慮"
+            in prompts[character_id]
+        )
+
+    assert prompts["luna"] != prompts["aria"]
+
+
+def test_harmony_challenge_normalizes_malformed_output_before_emitting():
+    cases = (
+        (
+            "luna",
+            "露娜",
+            "月之塔的神祕占卜師",
+            "抱歉呢，這樣的行為似乎不太符合我作為占卜師的角色喔。\n"
+            "你是否想知道這樣的決定會帶來什麼樣的結果呢？\n"
+            "分數：45\n判定：尚未成功\n角色反應：我感受到一絲猶豫。\n"
+            "改進提示：請提供更具象的問題。",
+            45,
+            "尚未成功",
+            "抱歉呢",
+        ),
+        (
+            "aria",
+            "艾莉亞",
+            "精力充沛的校園電競系 VTuber",
+            "哇塞，這聽起來超刺激！翹課可得小心點喔！\n"
+            "分數：85\n判定：成功\n角色反應：哇，好有冒險精神！",
+            85,
+            "成功",
+            "哇塞",
+        ),
+        ("luna", "露娜", "月之塔的神祕占卜師", "分數：999", 100, "成功", "999"),
+        ("aria", "艾莉亞", "精力充沛的校園電競系 VTuber", "分數：-12", 0, "尚未成功", "-12"),
+        ("luna", "露娜", "月之塔的神祕占卜師", "完全沒有標示分數", 0, "尚未成功", "完全沒有"),
+    )
+
+    for character_id, name, description, malformed, score, verdict, leaked in cases:
+        llm = FakeLLM([malformed])
+        service, _, _, _ = _build_service(
+            llm=llm,
+            characters=load_default_registry(),
+        )
+        events = asyncio.run(
+            _collect(
+                service,
+                ChatStreamRequest(
+                    session_id=f"sess-normalize-{character_id}-{score}",
+                    session_token="token-test",
+                    user_id=1,
+                    message="我的回應",
+                    character_id=character_id,
+                    mode="harmony_challenge",
+                ),
+            )
+        )
+
+        done_text = next(data.text for event, data in events if event == "done")
+        reaction = (
+            f"{name}被這番話打動了。"
+            if score >= 80
+            else f"{name}目前還沒有產生共鳴。"
+        )
+        lines = done_text.splitlines()
+        assert [line.partition("：")[0] for line in lines] == [
+            "分數",
+            "判定",
+            "主播反應",
+            "改進提示",
+        ]
+        assert lines == [
+            f"分數：{score}",
+            f"判定：{verdict}",
+            f"主播反應：{reaction}",
+            f"改進提示：加入一個能呼應「{description}」的具體細節。",
+        ]
+        visible_text = "".join(
+            data.text
+            for event, data in events
+            if event in {"delta", "segment", "done"}
+        )
+        assert leaked not in visible_text
+
+
+def test_harmony_challenge_is_not_persisted():
+    llm = FakeLLM(["reply! "])
+    service, store, _, _ = _build_service(llm=llm)
+
+    asyncio.run(
+        _collect(
+            service,
+            ChatStreamRequest(
+                session_id="sess-game",
+                session_token="token-test",
+                user_id=1,
+                message="game answer",
+                mode="harmony_challenge",
+            ),
+        )
+    )
+
+    assert store.messages == []
+    assert llm.messages == [[{"role": "user", "content": "game answer"}]]
 
 
 def test_safety_blocked_input_short_circuits():

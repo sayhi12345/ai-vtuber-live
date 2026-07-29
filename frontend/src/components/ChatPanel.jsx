@@ -7,6 +7,7 @@ export default function ChatPanel({
   busy,
   muted,
   llmProvider,
+  gameMode,
   characters,
   characterId,
   users,
@@ -21,6 +22,7 @@ export default function ChatPanel({
   onReset,
   onToggleMute,
   onChangeLLM,
+  onChangeGameMode,
   onChangeCharacter,
   onChangeUser,
   onCreateUser,
@@ -77,9 +79,25 @@ export default function ChatPanel({
             <option value="llamacpp">llama.cpp</option>
           </select>
         </label>
+        <label>
+          模式
+          <select
+            value={gameMode}
+            onChange={(e) => onChangeGameMode(e.target.value)}
+            disabled={busy}
+          >
+            <option value="chat">一般對話</option>
+            <option value="harmony_challenge">共鳴挑戰</option>
+          </select>
+        </label>
       </div>
       {currentCharacter?.short_description ? (
         <p className="muted character-desc">{currentCharacter.short_description}</p>
+      ) : null}
+      {gameMode === "harmony_challenge" ? (
+        <p className="muted character-desc">
+          說出能打動主播的話；主播會依照自己的人格評分，目標是 80 分。
+        </p>
       ) : null}
 
       <h2 className="section-label">Profile</h2>
@@ -121,7 +139,13 @@ export default function ChatPanel({
       <form className="composer" onSubmit={onSubmit}>
         <textarea
           value={draft}
-          placeholder={selectedUser ? "輸入你想和角色說的話..." : "請先建立或選擇使用者"}
+          placeholder={
+            selectedUser
+              ? gameMode === "harmony_challenge"
+                ? "試著說出能打動主播的話..."
+                : "輸入你想和角色說的話..."
+              : "請先建立或選擇使用者"
+          }
           onChange={(event) => onDraftChange(event.target.value)}
           disabled={busy || !selectedUser}
         />

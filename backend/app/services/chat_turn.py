@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import time
 import uuid
 from collections.abc import AsyncIterator
@@ -49,6 +50,46 @@ from app.session_store import (
 )
 
 logger = logging.getLogger(__name__)
+
+HARMONY_CHALLENGE_PROMPT = """
+
+【共鳴挑戰】
+依照上述角色人格，根據使用者這次的回應是否打動角色，給出 0-100 整數分數。
+分數 >= 80 時判定為「成功」；分數 <= 79 時判定為「尚未成功」。
+輸出必須恰好四行，不得增加任何其他文字。
+「角色反應」只能以角色口吻表達當下感受，且只能陳述現在的情緒或反應；不得告訴、要求、詢問或邀請使用者做任何事，也不得包含：應該、可以、不妨、記得、下次、先、請、一起、建議、試試、考慮。
+整份回覆唯一可採取行動的建議只能出現在「改進提示」，其他三行不得提出建議。
+分數：<0-100 integer>
+判定：<成功|尚未成功>
+角色反應：<one short current emotion/reaction sentence>
+改進提示：<the only actionable suggestion>
+"""
+
+
+def _normalize_harmony_challenge(
+    raw_text: str,
+    *,
+    character_name: str,
+    character_description: str,
+) -> str:
+    score_match = re.search(r"分數\s*[：:]\s*(-?\d+)", raw_text)
+    score = max(0, min(100, int(score_match.group(1)))) if score_match else 0
+    verdict = "成功" if score >= 80 else "尚未成功"
+    name = " ".join(character_name.split())
+    description = " ".join(character_description.split())
+    reaction = (
+        f"{name}被這番話打動了。"
+        if score >= 80
+        else f"{name}目前還沒有產生共鳴。"
+    )
+    return "\n".join(
+        (
+            f"分數：{score}",
+            f"判定：{verdict}",
+            f"主播反應：{reaction}",
+            f"改進提示：加入一個能呼應「{description}」的具體細節。",
+        )
+    )
 
 
 def _provider_name(requested: str | None, default_name: str) -> str:
@@ -98,10 +139,9 @@ class ChatTurnService:
     ) -> AsyncIterator[tuple[str, BaseModel]]:
         """Yield (event_name, typed_payload) tuples for one chat turn.
 
-        Side effects: publishes each event to the session bus, persists user
-        and assistant messages, logs metrics, and (on success) schedules a
-        memory-curation task. The caller is responsible for SSE-packing the
-        yielded tuples.
+        Side effects: publishes each event to the session bus, logs metrics,
+        and, for chat mode, persists messages and schedules memory curation.
+        The caller is responsible for SSE-packing the yielded tuples.
         """
         session_id = payload.session_id
         llm_provider_name = _provider_name(
@@ -112,6 +152,9 @@ class ChatTurnService:
         character_id = payload.character_id or self._settings.default_character_id
         character = self._characters.get(character_id)
         persona = character.to_system_prompt()
+        persist_turn = payload.mode == "chat"
+        if not persist_turn:
+            persona += HARMONY_CHALLENGE_PROMPT
 
         async def emit(name: str, data: BaseModel) -> tuple[str, BaseModel]:
             await self._events.publish(
@@ -143,9 +186,10 @@ class ChatTurnService:
             yield await emit("done", DoneEventData(text="", blocked=True))
             return
 
-        self._store.add_message(
-            session_id, "user", safe_input.text, payload.user_id, character_id
-        )
+        if persist_turn:
+            self._store.add_message(
+                session_id, "user", safe_input.text, payload.user_id, character_id
+            )
 
         relevant_memories, history = await asyncio.gather(
             self._search_memories(
@@ -161,6 +205,8 @@ class ChatTurnService:
                 self._settings.history_limit,
             ),
         )
+        if not persist_turn:
+            history.append({"role": "user", "content": safe_input.text})
         route = self._agent_router.decide(safe_input.text)
         logger.info(
             "Chat stream selected route: session_id=%s mode=%s skills=%s message=%s",
@@ -171,6 +217,7 @@ class ChatTurnService:
         )
         accumulator = SegmentAccumulator()
         full_output_parts: list[str] = []
+        harmony_raw_parts: list[str] = []
         segment_index = 0
         first_chunk_at: float | None = None
 
@@ -244,6 +291,10 @@ class ChatTurnService:
                     )
 
                 safe_chunk = self._safety.filter_output(chunk).text
+                if not persist_turn:
+                    harmony_raw_parts.append(safe_chunk)
+                    continue
+
                 full_output_parts.append(safe_chunk)
                 yield await emit("delta", DeltaEventData(text=safe_chunk))
 
@@ -292,6 +343,28 @@ class ChatTurnService:
             )
             return
 
+        if not persist_turn:
+            normalized = _normalize_harmony_challenge(
+                "".join(harmony_raw_parts),
+                character_name=character.profile.name,
+                character_description=character.profile.short_description,
+            )
+            full_output_parts.append(normalized)
+            yield await emit("delta", DeltaEventData(text=normalized))
+            for segment in accumulator.feed(normalized):
+                safe_segment = self._safety.filter_output(segment).text
+                emotion = detect_emotion(safe_segment)
+                yield await emit(
+                    "segment",
+                    SegmentEventData(
+                        index=segment_index,
+                        text=safe_segment,
+                        emotion=emotion,
+                        tts_provider=tts_provider_name,
+                    ),
+                )
+                segment_index += 1
+
         tail = accumulator.flush()
         if tail:
             safe_tail = self._safety.filter_output(tail).text
@@ -308,7 +381,7 @@ class ChatTurnService:
             )
 
         full_text = "".join(full_output_parts).strip()
-        if full_text:
+        if full_text and persist_turn:
             self._store.add_message(
                 session_id, "assistant", full_text, payload.user_id, character_id
             )
@@ -320,7 +393,7 @@ class ChatTurnService:
         )
         yield await emit("done", DoneEventData(text=full_text, blocked=False))
 
-        if full_text and self._memory_service.enabled:
+        if full_text and persist_turn and self._memory_service.enabled:
             curator_provider = _provider_name(
                 self._settings.memory_curator_provider, llm_provider_name
             )

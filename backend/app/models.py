@@ -42,6 +42,7 @@ class ChatStreamRequest(BaseModel):
     message: str = Field(min_length=1, max_length=4000)
     llm_provider: LLMProviderName | None = None
     character_id: str | None = Field(default=None, max_length=64)
+    mode: Literal["chat", "harmony_challenge"] = "chat"
     temperature: float = Field(default=0.7, ge=0.0, le=1.5)
 
 

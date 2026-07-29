@@ -61,6 +61,7 @@ function ChatPage() {
   const [error, setError] = useState("");
   const [muted, setMuted] = useState(false);
   const [llmProvider, setLLMProvider] = useState(DEFAULT_LLM_PROVIDER);
+  const [gameMode, setGameMode] = useState("chat");
   const [characters, setCharacters] = useState([]);
   const [characterId, setCharacterId] = useState(null);
   const [users, setUsers] = useState([]);
@@ -299,7 +300,8 @@ function ChatPage() {
           user_id: selectedUserId,
           message: text,
           llm_provider: llmProvider,
-          character_id: characterId
+          character_id: characterId,
+          mode: gameMode
         },
         (eventName, data) => {
           switch (eventName) {
@@ -362,6 +364,7 @@ function ChatPage() {
         busy={busy}
         muted={muted}
         llmProvider={llmProvider}
+        gameMode={gameMode}
         characters={characters}
         characterId={characterId}
         users={users}
@@ -376,6 +379,7 @@ function ChatPage() {
         onReset={handleReset}
         onToggleMute={handleToggleMute}
         onChangeLLM={setLLMProvider}
+        onChangeGameMode={setGameMode}
         onChangeCharacter={handleChangeCharacter}
         onChangeUser={handleChangeUser}
         onCreateUser={handleCreateUser}
