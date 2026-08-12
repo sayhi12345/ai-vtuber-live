@@ -72,6 +72,7 @@ function ChatPage() {
 
   const scopeKey = selectedUserId && characterId ? `${selectedUserId}:${characterId}` : null;
   const messages = scopeKey ? (messagesByScope[scopeKey] || []) : [];
+  const currentCharacter = characters.find(({ id }) => id === characterId);
 
   useEffect(() => {
     let cancelled = false;
@@ -188,8 +189,9 @@ function ChatPage() {
     const url = new URL(`${window.location.origin}/stage`);
     url.searchParams.set("session_id", sessionId);
     url.searchParams.set("session_token", sessionToken);
+    url.searchParams.set("character_id", session.character_id);
     return url.toString();
-  }, [sessionId, sessionToken]);
+  }, [session, sessionId, sessionToken]);
 
   const handleStop = async () => {
     abortRef.current?.abort();
@@ -347,6 +349,7 @@ function ChatPage() {
   return (
     <main className="layout">
       <Live2DStage
+        modelPath={currentCharacter?.avatar || undefined}
         expression={expression}
         mouthOpen={mouthOpen}
         subtitle={subtitle}
@@ -390,6 +393,8 @@ function StagePage() {
   const stored = loadStoredSession();
   const sessionId = search.get("session_id") || stored?.session_id || "";
   const sessionToken = search.get("session_token") || stored?.session_token || "";
+  const characterId = search.get("character_id") || stored?.character_id || "";
+  const [characters, setCharacters] = useState([]);
   const [muted, setMuted] = useState(search.get("audio") === "1" ? false : true);
   const [subtitle, setSubtitle] = useState(
     sessionId && sessionToken ? "等待對話事件..." : "需要有效的 session — 請從主頁開啟。"
@@ -399,6 +404,13 @@ function StagePage() {
   const [speaking, setSpeaking] = useState(false);
   const [error, setError] = useState("");
   const subtitleRef = useRef("");
+  const currentCharacter = characters.find(({ id }) => id === characterId);
+
+  useEffect(() => {
+    getCharacters()
+      .then((data) => setCharacters(data.characters || []))
+      .catch(() => setCharacters([]));
+  }, []);
 
   const { enqueue, stop } = useSpeechQueue({
     sessionId,
@@ -454,6 +466,7 @@ function StagePage() {
   return (
     <main className="stage-only">
       <Live2DStage
+        modelPath={currentCharacter?.avatar || undefined}
         expression={expression}
         mouthOpen={mouthOpen}
         subtitle={subtitle}
