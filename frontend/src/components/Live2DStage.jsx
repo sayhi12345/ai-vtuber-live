@@ -126,7 +126,7 @@ export default function Live2DStage({
         await ensureCubismCoreScript();
         const PIXI = await import("pixi.js");
         window.PIXI = PIXI;
-        const { Live2DModel } = await import("pixi-live2d-display/cubism4");
+        const { Live2DModel, MotionPriority } = await import("pixi-live2d-display/cubism4");
         if (canceled || !hostRef.current) return;
 
         const app = new PIXI.Application({
@@ -152,7 +152,7 @@ export default function Live2DStage({
         lipSyncParamIdsRef.current = getLipSyncParamIds(model);
 
         // Index 0 is haru_g_idle which has Loop:true; the other Idle entries are one-shots
-        model.motion("Idle", 0);
+        model.motion("Idle", 0, MotionPriority.IDLE);
 
         // Apply any expression that arrived before the model was ready
         const initExpr = EMOTION_TO_EXPRESSION[expressionRef.current];
@@ -218,8 +218,7 @@ export default function Live2DStage({
             if (hits.includes("Head")) {
               modelRef.current?.motion("Tap");
             } else if (hits.includes("Body")) {
-              modelRef.current?.expression("F04"); // shy/blush
-              modelRef.current?.motion("Tap");
+              modelRef.current?.motion("ArmsCrossed");
             }
           }
           pointerDownPosRef.current = null;

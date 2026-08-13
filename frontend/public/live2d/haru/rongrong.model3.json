@@ -57,6 +57,11 @@
           "File": "motion/haru_g_m05.motion3.json",
           "Sound": "../shizuku/sounds/flickHead_01.mp3"
         }
+      ],
+      "ArmsCrossed": [
+        {
+          "File": "motion/haru_g_arms_crossed.motion3.json"
+        }
       ]
     }
   },
