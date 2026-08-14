@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import StageAvatar from "./StageAvatar";
 
 const DEFAULT_MODEL_PATH =
-  import.meta.env.VITE_LIVE2D_MODEL_PATH || "/live2d/haru/haru_greeter_t03.model3.json";
+  import.meta.env.VITE_LIVE2D_MODEL_PATH || "/live2d/haru/haru_greeter_t05.model3.json";
 const DEFAULT_CORE_SCRIPT_PATH =
   import.meta.env.VITE_LIVE2D_CORE_SCRIPT_PATH || "/live2d/live2dcubismcore.min.js";
 const MOUTH_PARAM_ID = "ParamMouthOpenY";
