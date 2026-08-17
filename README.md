@@ -98,7 +98,7 @@ cp .env.example .env
 
 Live2D model default path:
 
-- `frontend/public/live2d/haru/haru_greeter_t03.model3.json`
+- `frontend/public/live2d/haru/haru_greeter_t05.model3.json`
 - configurable with `VITE_LIVE2D_MODEL_PATH`
 - Cubism Core runtime path configurable with `VITE_LIVE2D_CORE_SCRIPT_PATH`
 

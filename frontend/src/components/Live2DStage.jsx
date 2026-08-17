@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import StageAvatar from "./StageAvatar";
 
 const DEFAULT_MODEL_PATH =
-  import.meta.env.VITE_LIVE2D_MODEL_PATH || "/live2d/haru/haru_greeter_t03.model3.json";
+  import.meta.env.VITE_LIVE2D_MODEL_PATH || "/live2d/haru/haru_greeter_t05.model3.json";
 const DEFAULT_CORE_SCRIPT_PATH =
   import.meta.env.VITE_LIVE2D_CORE_SCRIPT_PATH || "/live2d/live2dcubismcore.min.js";
 const MOUTH_PARAM_ID = "ParamMouthOpenY";
@@ -94,6 +94,14 @@ export default function Live2DStage({
   // pointer position at pointerdown — used to distinguish click from drag
   const pointerDownPosRef = useRef(null);
   const [loadError, setLoadError] = useState("");
+  // Reset the error during render when the model changes, so the live2d-host
+  // div is back in the DOM before the setup effect runs — otherwise one bad
+  // model would lock every later character into the fallback avatar.
+  const [lastModelPath, setLastModelPath] = useState(modelPath);
+  if (lastModelPath !== modelPath) {
+    setLastModelPath(modelPath);
+    setLoadError("");
+  }
 
   mouthTargetRef.current = clamp01(mouthOpen);
   speakingRef.current = speaking;
@@ -137,16 +145,22 @@ export default function Live2DStage({
         });
         hostRef.current.innerHTML = "";
         hostRef.current.appendChild(app.view);
+        // Register the app before the async model load so cleanup can always
+        // destroy it — a failed load used to leak the app and its WebGL context.
+        appRef.current = app;
 
         const model = await Live2DModel.from(modelPath, { autoInteract: false });
         if (canceled) {
-          app.destroy(true);
+          // Cleanup already destroyed the app unless it ran before we registered it.
+          if (appRef.current === app) {
+            appRef.current = null;
+            app.destroy(true);
+          }
           return;
         }
 
         model.anchor.set(0.5, 0.5);
         app.stage.addChild(model);
-        appRef.current = app;
         modelRef.current = model;
         mouthCurrentRef.current = 0;
         lipSyncParamIdsRef.current = getLipSyncParamIds(model);
@@ -261,6 +275,9 @@ export default function Live2DStage({
         model.internalModel.on("beforeModelUpdate", beforeModelUpdateHandler);
         setLoadError("");
       } catch (error) {
+        // A stale in-flight load must not stomp the state of the model
+        // that replaced it.
+        if (canceled) return;
         const reason = error instanceof Error ? error.message : "Unknown error";
         setLoadError(reason);
         onLoadErrorRef.current?.(reason);

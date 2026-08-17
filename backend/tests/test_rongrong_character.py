@@ -30,8 +30,8 @@ def test_rongrong_manifest_uses_independent_rgba_textures() -> None:
     textures = manifest["FileReferences"]["Textures"]
 
     assert textures == [
-        "haru_greeter_t03.2048/texture_00_rongrong.png",
-        "haru_greeter_t03.2048/texture_01_rongrong.png",
+        "haru_greeter_t05.2048/texture_00_rongrong.png",
+        "haru_greeter_t05.2048/texture_01_rongrong.png",
     ]
     for texture in textures:
         data = (HARU_DIR / texture).read_bytes()
@@ -41,9 +41,9 @@ def test_rongrong_manifest_uses_independent_rgba_textures() -> None:
 
 
 def test_original_haru_manifest_keeps_original_textures() -> None:
-    manifest = json.loads((HARU_DIR / "haru_greeter_t03.model3.json").read_text())
+    manifest = json.loads((HARU_DIR / "haru_greeter_t05.model3.json").read_text())
 
     assert manifest["FileReferences"]["Textures"] == [
-        "haru_greeter_t03.2048/texture_00.png",
-        "haru_greeter_t03.2048/texture_01.png",
+        "haru_greeter_t05.2048/texture_00.png",
+        "haru_greeter_t05.2048/texture_01.png",
     ]
