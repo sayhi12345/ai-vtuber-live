@@ -1,0 +1,83 @@
+{
+  "Version": 3,
+  "Meta": {
+    "Duration": 3.4,
+    "Fps": 30.0,
+    "Loop": false,
+    "AreBeziersRestricted": true,
+    "CurveCount": 13,
+    "TotalSegmentCount": 35,
+    "TotalPointCount": 48,
+    "UserDataCount": 0,
+    "TotalUserDataSize": 0,
+    "FadeInTime": 0.3,
+    "FadeOutTime": 0.3
+  },
+  "Curves": [
+    {
+      "Target": "Parameter",
+      "Id": "ParamBodyUpper",
+      "Segments": [0, 0, 0, 0.7, 0.5, 0, 2.7, 0.5, 0, 3.4, 0]
+    },
+    {
+      "Target": "Parameter",
+      "Id": "ParamArmLA",
+      "Segments": [0, 0.5, 0, 0.7, 0.9, 0, 2.7, 0.9, 0, 3.4, 0.5]
+    },
+    {
+      "Target": "Parameter",
+      "Id": "ParamArmRA",
+      "Segments": [0, 0.5, 0, 0.7, 0.9, 0, 2.7, 0.9, 0, 3.4, 0.5]
+    },
+    {
+      "Target": "Parameter",
+      "Id": "ParamArmLB",
+      "Segments": [0, 0, 0, 0.7, 2.7, 0, 2.7, 2.7, 0, 3.4, 0]
+    },
+    {
+      "Target": "Parameter",
+      "Id": "ParamArmRB",
+      "Segments": [0, 0, 0, 0.7, -1, 0, 2.7, -1, 0, 3.4, 0]
+    },
+    {
+      "Target": "Parameter",
+      "Id": "ParamHandChangeR",
+      "Segments": [0, 0, 0, 0.7, 0, 0, 2.7, 0, 0, 3.4, 0]
+    },
+    {
+      "Target": "Parameter",
+      "Id": "ParamHandAngleR",
+      "Segments": [0, 0, 0, 0.7, 1, 0, 2.7, 1, 0, 3.4, 0]
+    },
+    {
+      "Target": "Parameter",
+      "Id": "ParamHandDhangeL",
+      "Segments": [0, 0, 0, 0.7, 0, 0, 2.7, 0, 0, 3.4, 0]
+    },
+    {
+      "Target": "Parameter",
+      "Id": "ParamHandAngleL",
+      "Segments": [0, 0, 0, 0.7, 0.3, 0, 2.7, 0.3, 0, 3.4, 0]
+    },
+    {
+      "Target": "PartOpacity",
+      "Id": "Part01ArmRB001",
+      "Segments": [0, 1, 2, 3.37, 1, 0, 3.4, 1]
+    },
+    {
+      "Target": "PartOpacity",
+      "Id": "Part01ArmLB001",
+      "Segments": [0, 1, 2, 3.37, 1, 0, 3.4, 1]
+    },
+    {
+      "Target": "PartOpacity",
+      "Id": "Part01ArmRA001",
+      "Segments": [0, 0, 2, 3.37, 0, 0, 3.4, 0]
+    },
+    {
+      "Target": "PartOpacity",
+      "Id": "Part01ArmLA001",
+      "Segments": [0, 0, 2, 3.37, 0, 0, 3.4, 0]
+    }
+  ]
+}
